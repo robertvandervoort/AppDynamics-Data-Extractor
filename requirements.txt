@@ -1,0 +1,6 @@
+pandas
+streamlit
+lxml
+xlsxwriter
+tabulate
+requests

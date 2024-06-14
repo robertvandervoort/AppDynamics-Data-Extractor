@@ -19,7 +19,6 @@ last_token_fetch_time = ""
 token_expiration = 300
 expiration_buffer = 30
 
-#---FUNCTION DEFINITIONS
 def authenticate(state):
     """get XCSRF token for use in this session"""
     if state == "reauth":
@@ -28,7 +27,6 @@ def authenticate(state):
         print("Begin login.")
     
     connect(APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET)
-    
     return
 
 def is_token_valid():
@@ -489,21 +487,36 @@ def get_healthRules(application_id):
 
     return healthRules_response    
 
-def debug_df(dfname, numlines, msg):
-    print()
-    print(msg)
-    print(dfname.head(numlines).to_markdown(index=False, numalign='left', stralign='left'))
-    print()
-    return None
+def debug_df(df, df_name, num_lines=10):
+    """Displays DataFrame information in a more readable way."""
+    st.subheader(f"Debug Info: {df_name}")  # Use subheader instead of nested expander
+    st.write(f"Shape: {df.shape}")
+    st.write(f"Columns: {df.columns.to_list()}")
+    st.write(f"First {num_lines} rows:")
+    st.write(df.head(num_lines).to_markdown(index=False, numalign='left', stralign='left'))
 
 # --- MAIN (Streamlit UI) ---
 st.title("AppDynamics Data Extractor")
 
+# --- user config form
 with st.form("config_form"):
     account_name = st.text_input("Account Name", value="")
     api_client = st.text_input("API client name", value="")
     api_key = st.text_input("API Key", type="password", value="")
-    application_id = st.text_input("Application ID (optional)", value="")
+    
+    # --- Button to fetch applications ---
+    all_fields_filled = all([account_name, api_client, api_key])  # Check if all fields have values
+    connect_button = st.form_submit_button("connect", disabled=not all_fields_filled)
+
+    # --- Application Selection ---
+    if 'applications_df' in st.session_state and not st.session_state['applications_df'].empty:  # Check if applications are in session state
+        selected_app_names = st.multiselect(
+            "Select Applications (Optional)",
+            st.session_state['applications_df']["name"].tolist(),
+            default=st.session_state['applications_df']["name"].tolist() #select all apps by default if the user has fetched them
+        )
+    else:
+        application_id = st.text_input("Application ID (optional)", value="")
 
     metric_duration_mins = st.text_input("Metric duration (mins)", value="60")
     metric_rollup = st.checkbox("Metric Rollup?", value=False)
@@ -545,227 +558,243 @@ if submitted:
     BASE_URL = "https://"+APPDYNAMICS_ACCOUNT_NAME+".saas.appdynamics.com"
 
     # --- MAIN application code
-    authenticate("initial")
+    with st.status("Extracting data...", expanded=True) as status:
+        st.write(f"Logging into controller at {BASE_URL}...")
+        authenticate("initial")
 
-    # Get applications
-    applications_response = get_applications()
-    applications, applications_status = validate_json(applications_response)
+        # Get applications
+        st.write("Retrieving applications...")
+        applications_response = get_applications()
+        applications, applications_status = validate_json(applications_response)
 
-    if applications_status == "valid":
-        applications_df = pd.DataFrame(applications)
-        
-        applications_df = applications_df.rename(columns={
-            "id": "app_id",
-            "name": "app_name"
-        })
+        if applications_status == "valid":
+            applications_df = pd.DataFrame(applications)
+            applications_df = applications_df.rename(columns={
+                "id": "app_id",
+                "name": "app_name"
+            })
 
-        if DEBUG:
-            debug_df(applications_df, 10, "Applications dataframe:")
-            #input("PRESS ANY KEY")
+            st.session_state['applications_df'] = applications_df  # Store in session state
 
-        # Initialize empty DataFrames
-        information_df = pd.DataFrame()
-        all_bts_df = pd.DataFrame()
-        all_tiers_df = pd.DataFrame()
-        all_nodes_df = pd.DataFrame()
-        all_backends_df = pd.DataFrame()
-        all_snapshots_df = pd.DataFrame()
-        all_snapshots_merged_df = pd.DataFrame()
+            if DEBUG:
+                debug_df(applications_df, "applications_df")
 
-        #get current date and time for info sheet
-        now = datetime.datetime.now()
-        current_date_time = now.strftime("%Y-%m-%d %H:%M:%S")
+            # Initialize empty DataFrames
+            information_df = pd.DataFrame()
+            all_bts_df = pd.DataFrame()
+            all_tiers_df = pd.DataFrame()
+            all_nodes_df = pd.DataFrame()
+            all_backends_df = pd.DataFrame()
+            all_snapshots_df = pd.DataFrame()
+            all_snapshots_merged_df = pd.DataFrame()
 
-        information_df = pd.DataFrame({
-            "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "APPDYNAMICS_API_CLIENT_SECRET", "APPLICATION_ID", "METRIC_DURATION_MINS", "METRIC_ROLLUP", "PULL_SNAPSHOTS"],
-            "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, "xxx", APPLICATION_ID, METRIC_DURATION_MINS, METRIC_ROLLUP, PULL_SNAPSHOTS]
-        })
+            #get current date and time for info sheet
+            now = datetime.datetime.now()
+            current_date_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Process each application
-        for _, application in applications_df.iterrows():
-            #initialize DataFrames
-            bts_df = pd.DataFrame()
-            tiers_df = pd.DataFrame()
-            nodes_df = pd.DataFrame()
-            backends_df = pd.DataFrame()
-            snapshots_df = pd.DataFrame()
-            
-            app_id = application["app_id"]
+            information_df = pd.DataFrame({
+                "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "APPDYNAMICS_API_CLIENT_SECRET", "APPLICATION_ID", "METRIC_DURATION_MINS", "METRIC_ROLLUP", "PULL_SNAPSHOTS"],
+                "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, "xxx", APPLICATION_ID, METRIC_DURATION_MINS, METRIC_ROLLUP, PULL_SNAPSHOTS]
+            })
 
-            # Get and process business transactions
-            bts_response = get_bts(app_id)
-            bts_data, bts_status = bts_response
-            
-            if bts_status == "valid":
-                bts_df['app_id'] = app_id
-                bts_df = pd.DataFrame(bts_data)
-                bts_df = bts_df.rename(columns={
-                    "id": "bt_id",
-                    "name": "bt_name"
-                })
-                
-                all_bts_df = pd.concat([all_bts_df, bts_df])
-
-                if DEBUG:
-                    print(f"App id:{app_id}")
-                    debug_df(bts_df, 10, "BTs dataframe:")
-                    #input("PRESS ANY KEY")
-            elif bts_status == "empty":
+            # Process each application
+            for _, application in applications_df.iterrows():
+                #initialize DataFrames
                 bts_df = pd.DataFrame()
-                if DEBUG:
-                    print("BT DATAFRAME EMPTY")
-            
-            # Get and process tiers
-            tiers_response = get_tiers(app_id)
-            tiers, tiers_status = validate_json(tiers_response)
-            if tiers_status == "valid":
-                tiers_df = pd.DataFrame(tiers)
-                tiers_df['app_id'] = app_id
-                tiers_df = tiers_df.rename(columns={
-                    "id": "tier_id",
-                    "name": "tier_name"
-                })
+                tiers_df = pd.DataFrame()
+                nodes_df = pd.DataFrame()
+                backends_df = pd.DataFrame()
+                snapshots_df = pd.DataFrame()
+                
+                app_id = application["app_id"]
+                app_name = application["app_name"]
 
-                all_tiers_df = pd.concat([all_tiers_df, tiers_df])
-
-                if DEBUG:
-                    debug_df(tiers_df, 10, "Tiers dataframe:")
-                    #input("PRESS ANY KEY")
-
-            # Get and process nodes
-            nodes_response = get_app_nodes(app_id)
-            nodes, nodes_status = validate_json(nodes_response)
-            if nodes_status == "valid":
-                nodes_df = pd.DataFrame(nodes)
-                nodes_df['app_id'] = app_id
-                nodes_df = nodes_df.rename(columns={
-                    "id": "node_id",
-                    "name": "node_name"
-                })
-
-                all_nodes_df = pd.concat([all_nodes_df, nodes_df])
-
-                if DEBUG:
-                    debug_df(nodes_df, 10, "Nodes dataframe:")
-                    #input("PRESS ANY KEY")
-
-            # Get and process backends
-            backends_response = get_app_backends(app_id)
-            backends, backends_status = validate_json(backends_response)
-            if backends_status == "valid":
-                backends_df = pd.DataFrame(backends)
-                backends_df['app_id'] = app_id
-                backends_df = backends_df.rename(columns={
-                    "id": "backend_id",
-                    "name": "backend_name"
-                })
-
-                all_backends_df = pd.concat([all_backends_df, backends_df])
-
-                if DEBUG:
-                    debug_df(backends_df, 10, "Backends dataframe:")
-                    #input("PRESS ANY KEY")
-
-            # Get and process snapshots
-            if PULL_SNAPSHOTS:
-                snapshots_response = get_snapshots(app_id)
-                snapshots, snapshots_status = validate_json(snapshots_response)
-                if snapshots_status == "valid":
-                    snapshots_df = pd.DataFrame(snapshots)
-                    snapshots_df['app_id'] = app_id
-                    if DEBUG:
-                        #input("main code - snapshots status is valid")
-                        print()
-                        debug_df(snapshots_df, 10, "Snapshots df:")
-                    all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
-                    #if DEBUG:
-                        #debug_df(all_snapshots_df, 10, "All Snapshots df:")
-                        #input("main code - snapshots status is valid")
-
-                elif snapshots_status == "empty":
-                    print ("            --- No snapshots returned")
-
-        #merge the things
-        # Join the DataFrames as needed
-        if not all_snapshots_df.empty:
-            "Snapshots available, merging data..."
-            all_snapshots_merged_df = pd.merge(
-                all_snapshots_df, all_tiers_df, left_on="applicationComponentId", right_on="tier_id", how="left", suffixes=(None, "_tier")
-            ).merge(
-                all_nodes_df, left_on="applicationComponentNodeId", right_on="node_id", how="left", suffixes=(None, "_node")
-            ).merge(
-                all_bts_df, left_on="businessTransactionId", right_on="bt_id", how="left", suffixes=(None, "_bt")
-            ).merge(
-                applications_df, left_on="applicationId", right_on="app_id", how="left", suffixes=(None, "_app")
-            )
-
-            #drop the redundant columns
-            if DEBUG:
-                print("Removing redundant columns from merge...")
-            all_snapshots_merged_df.drop(columns=['app_id_tier','app_id_node','app_id_app','app_id','bt_id','entryPointTypeString'], inplace=True)
-        else:
-            if DEBUG:
-                print("all_snapshots_df is empty, skipping merge...")
-
-        #change the output file name to include app name if this is against a single app
-        if len(applications_df) == 1:
-            OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"-"+(applications_df["app_name"].iloc[0]).replace(" ", "_")+"-analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
-
-        print(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
-        
-        # --- Write to Excel with formatting ---
-        with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine='xlsxwriter') as writer:
-            workbook = writer.book
-            # Define formats
-            header_format = workbook.add_format({
-                'bg_color': '#ADD8E6',
-                'bold': True,
-                'align': 'left',
-                'border': 1,
-                'font_size': 14
-                })
-            odd_row_format = workbook.add_format({
-                'bg_color': '#C2C2C2',
-                'border': 1
-                })  # Light gray
-            even_row_format = workbook.add_format({
-                'border': 1
-                })  # White
-
-            df_to_sheet_map = {}
-
-            for df_name, df in [
-                ("Info", information_df),
-                ("Applications", applications_df),
-                ("BTs", all_bts_df),
-                ("Tiers", all_tiers_df),
-                ("Nodes", all_nodes_df),
-                ("Backends", all_backends_df),
-                ("Snapshots", all_snapshots_merged_df),
-            ]:
-                if not df.empty:
-                    print(f"Writing {df_name} DataFrame...")
-                    df.to_excel(writer, sheet_name=df_name, index=False)
+                # Get and process business transactions
+                st.write(f"Retrieving business transactions for {app_name}...")
+                bts_response = get_bts(app_id)
+                bts_data, bts_status = bts_response
+                
+                if bts_status == "valid":
+                    bts_df['app_id'] = app_id
+                    bts_df = pd.DataFrame(bts_data)
+                    bts_df = bts_df.rename(columns={
+                        "id": "bt_id",
+                        "name": "bt_name"
+                    })
                     
-                    # Get the worksheet and apply formatting
-                    worksheet = writer.sheets[df_name]
+                    all_bts_df = pd.concat([all_bts_df, bts_df])
 
-                    # Auto-adjust column widths and add formatting
-                    for col_num, value in enumerate(df.columns.values):
-                        column_length = max(df[value].astype(str).map(len).max(), len(value))
-                        worksheet.set_column(col_num, col_num, column_length + 3)
-                        worksheet.write(0, col_num, value, header_format)  # Format header
+                    if DEBUG:
+                        print(f"App id:{app_id}")
+                        debug_df(bts_df, "bts_df")
+                        #input("PRESS ANY KEY")
+                elif bts_status == "empty":
+                    bts_df = pd.DataFrame()
+                    if DEBUG:
+                        print("BT DATAFRAME EMPTY")
+                
+                # Get and process tiers
+                st.write(f"Retrieving tiers for {app_name}...")
+                tiers_response = get_tiers(app_id)
+                tiers, tiers_status = validate_json(tiers_response)
+                if tiers_status == "valid":
+                    tiers_df = pd.DataFrame(tiers)
+                    tiers_df['app_id'] = app_id
+                    tiers_df = tiers_df.rename(columns={
+                        "id": "tier_id",
+                        "name": "tier_name"
+                    })
+
+                    all_tiers_df = pd.concat([all_tiers_df, tiers_df])
+
+                    if DEBUG:
+                        debug_df(tiers_df, "tiers_df")
+                        #input("PRESS ANY KEY")
+
+                # Get and process nodes
+                st.write(f"Retrieving nodes for {app_name}...")
+                nodes_response = get_app_nodes(app_id)
+                nodes, nodes_status = validate_json(nodes_response)
+                if nodes_status == "valid":
+                    nodes_df = pd.DataFrame(nodes)
+                    nodes_df['app_id'] = app_id
+                    nodes_df = nodes_df.rename(columns={
+                        "id": "node_id",
+                        "name": "node_name"
+                    })
+
+                    all_nodes_df = pd.concat([all_nodes_df, nodes_df])
+
+                    if DEBUG:
+                        debug_df(nodes_df, "nodes_df")
+                        #input("PRESS ANY KEY")
+
+                # Get and process backends
+                st.write(f"Retrieving backends for {app_name}...")
+                backends_response = get_app_backends(app_id)
+                backends, backends_status = validate_json(backends_response)
+                if backends_status == "valid":
+                    backends_df = pd.DataFrame(backends)
+                    backends_df['app_id'] = app_id
+                    backends_df = backends_df.rename(columns={
+                        "id": "backend_id",
+                        "name": "backend_name"
+                    })
+
+                    all_backends_df = pd.concat([all_backends_df, backends_df])
+
+                    if DEBUG:
+                        debug_df(backends_df, "backends_df")
+                        #input("PRESS ANY KEY")
+
+                # Get and process snapshots
+                if PULL_SNAPSHOTS:
+                    st.write(f"Retrieving snapshots for {app_name}...")
+                    snapshots_response = get_snapshots(app_id)
+                    snapshots, snapshots_status = validate_json(snapshots_response)
+                    if snapshots_status == "valid":
+                        snapshots_df = pd.DataFrame(snapshots)
+                        snapshots_df['app_id'] = app_id
+                        if DEBUG:
+                            #input("main code - snapshots status is valid")
+                            print()
+                            debug_df(snapshots_df, "snapshots_df")
+                        all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
+                        #if DEBUG:
+                            #debug_df(all_snapshots_df, "all_snapshots_df")
+                            #input("main code - snapshots status is valid")
+
+                    elif snapshots_status == "empty":
+                        print ("            --- No snapshots returned")
+
+            #merge the things
+            # Join the DataFrames as needed
+            if not all_snapshots_df.empty:
+                st.write("Performing merge on snapshots data...")
+                all_snapshots_merged_df = pd.merge(
+                    all_snapshots_df, all_tiers_df, left_on="applicationComponentId", right_on="tier_id", how="left", suffixes=(None, "_tier")
+                ).merge(
+                    all_nodes_df, left_on="applicationComponentNodeId", right_on="node_id", how="left", suffixes=(None, "_node")
+                ).merge(
+                    all_bts_df, left_on="businessTransactionId", right_on="bt_id", how="left", suffixes=(None, "_bt")
+                ).merge(
+                    applications_df, left_on="applicationId", right_on="app_id", how="left", suffixes=(None, "_app")
+                )
+
+                #drop the redundant columns
+                if DEBUG:
+                    print("Removing redundant columns from merge...")
+                st.write("Removing redundant columns from merge...")
+                all_snapshots_merged_df.drop(columns=['app_id_tier','app_id_node','app_id_app','app_id','bt_id','entryPointTypeString'], inplace=True)
+            else:
+                st.write("all_snapshots_df is empty, skipping merge...")
+                if DEBUG:
+                    print("all_snapshots_df is empty, skipping merge...")
+
+            #change the output file name to include app name if this is against a single app
+            if len(applications_df) == 1:
+                OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"-"+(applications_df["app_name"].iloc[0]).replace(" ", "_")+"-analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
+
+            st.write(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
+            if DEBUG:
+                print(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
+            
+            # --- Write to Excel with formatting ---
+            with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine='xlsxwriter') as writer:
+                workbook = writer.book
+                # Define formats
+                header_format = workbook.add_format({
+                    'bg_color': '#ADD8E6',
+                    'bold': True,
+                    'align': 'left',
+                    'border': 1,
+                    'font_size': 14
+                    })
+                odd_row_format = workbook.add_format({
+                    'bg_color': '#C2C2C2',
+                    'border': 1
+                    })  # Light gray
+                even_row_format = workbook.add_format({
+                    'border': 1
+                    })  # White
+
+                df_to_sheet_map = {}
+
+                for df_name, df in [
+                    ("Info", information_df),
+                    ("Applications", applications_df),
+                    ("BTs", all_bts_df),
+                    ("Tiers", all_tiers_df),
+                    ("Nodes", all_nodes_df),
+                    ("Backends", all_backends_df),
+                    ("Snapshots", all_snapshots_merged_df),
+                ]:
+                    if not df.empty:
+                        print(f"Writing {df_name} DataFrame...")
+                        df.to_excel(writer, sheet_name=df_name, index=False)
                         
-                    # Apply alternating row colors (starting from the second row)
-                    for row_num in range(1, df.shape[0] + 1):
-                        if row_num % 2 == 1:
-                            worksheet.set_row(row_num, cell_format=odd_row_format)
-                        else:
-                            worksheet.set_row(row_num, cell_format=even_row_format)
-            print("Finished.")
+                        # Get the worksheet and apply formatting
+                        worksheet = writer.sheets[df_name]
 
-    else:
-        if application_id != "":
-            print(f"No application data found for {application_id}")
+                        # Auto-adjust column widths and add formatting
+                        for col_num, value in enumerate(df.columns.values):
+                            column_length = max(df[value].astype(str).map(len).max(), len(value))
+                            worksheet.set_column(col_num, col_num, column_length + 3)
+                            worksheet.write(0, col_num, value, header_format)  # Format header
+                            
+                        # Apply alternating row colors (starting from the second row)
+                        for row_num in range(1, df.shape[0] + 1):
+                            if row_num % 2 == 1:
+                                worksheet.set_row(row_num, cell_format=odd_row_format)
+                            else:
+                                worksheet.set_row(row_num, cell_format=even_row_format)
+                st.write("*Finished.* :sunglasses:")
+                if DEBUG:
+                    print("Finished.")
+
         else:
-            print("No application data found.")
+            if application_id != "":
+                st.write(f"No application data found for {application_id}")
+            else:
+                st.write("No application data found.")
+    status.update(label="Extraction complete!", state="complete", expanded=False)

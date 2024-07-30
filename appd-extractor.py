@@ -304,6 +304,23 @@ def get_applications():
 
     return applications_response
 
+def refresh_applications():
+    st.write("Retrieving applications...")
+    applications_response = get_applications()
+    applications, applications_status = validate_json(applications_response)
+
+    if applications_status == "valid":
+        applications_df = pd.DataFrame(applications)
+        applications_df = applications_df.rename(columns={
+            "id": "app_id",
+            "name": "app_name"
+        })
+
+        st.session_state['applications_df'] = applications_df  # Store in session state
+
+        if DEBUG:
+            debug_df(applications_df, "applications_df")
+
 @handle_rest_errors
 def get_tiers(application_id):
     """Gets the tiers in the application"""  
@@ -503,21 +520,7 @@ with st.form("config_form"):
     account_name = st.text_input("Account Name", value="")
     api_client = st.text_input("API client name", value="")
     api_key = st.text_input("API Key", type="password", value="")
-    
-    # --- Button to fetch applications ---
-    all_fields_filled = all([account_name, api_client, api_key])  # Check if all fields have values
-    connect_button = st.form_submit_button("connect", disabled=not all_fields_filled)
-
-    # --- Application Selection ---
-    if 'applications_df' in st.session_state and not st.session_state['applications_df'].empty:  # Check if applications are in session state
-        selected_app_names = st.multiselect(
-            "Select Applications (Optional)",
-            st.session_state['applications_df']["name"].tolist(),
-            default=st.session_state['applications_df']["name"].tolist() #select all apps by default if the user has fetched them
-        )
-    else:
-        application_id = st.text_input("Application ID (optional)", value="")
-
+    application_id = st.text_input("Application ID (optional)", value="")
     metric_duration_mins = st.text_input("Metric duration (mins)", value="60")
     metric_rollup = st.checkbox("Metric Rollup?", value=False)
 
@@ -529,9 +532,9 @@ with st.form("config_form"):
     submitted = st.form_submit_button("Extract Data")
 
 if submitted:
-    
     # Update global variables with user input
-    global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS
+    global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
+        APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS
     print(f"account_name={account_name}, api_client={api_client}, api_key={api_key}, a[[;ocatopm_id={application_id}]]")
     APPDYNAMICS_ACCOUNT_NAME = account_name
     APPDYNAMICS_API_CLIENT = api_client
@@ -562,7 +565,7 @@ if submitted:
         st.write(f"Logging into controller at {BASE_URL}...")
         authenticate("initial")
 
-        # Get applications
+        # Get applications for processing
         st.write("Retrieving applications...")
         applications_response = get_applications()
         applications, applications_status = validate_json(applications_response)
@@ -706,6 +709,7 @@ if submitted:
 
                     elif snapshots_status == "empty":
                         print ("            --- No snapshots returned")
+                        st.write(f"No snapshots found for {app_name}.")
 
             #merge the things
             # Join the DataFrames as needed
@@ -724,7 +728,9 @@ if submitted:
                 #drop the redundant columns
                 if DEBUG:
                     print("Removing redundant columns from merge...")
-                st.write("Removing redundant columns from merge...")
+                else:
+                    st.write("Removing redundant columns from merge...")
+                
                 all_snapshots_merged_df.drop(columns=['app_id_tier','app_id_node','app_id_app','app_id','bt_id','entryPointTypeString'], inplace=True)
             else:
                 st.write("all_snapshots_df is empty, skipping merge...")

@@ -430,7 +430,7 @@ def get_app_backends(application_id):
 @handle_rest_errors
 def get_snapshots(application_id):
     """Gets snapshot data from an application"""
-    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&first-in-chain=false&need-exit-calls=true&need-props=true&maximum-results=1000000&output=json"
+    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&first-in-chain=" + FIRST_IN_CHAIN + "&need-exit-calls=true&need-props=true&maximum-results=1000000&output=json"
 
     if DEBUG:
         print("    --- Fetching snapshots from: "+ snapshots_url)
@@ -542,6 +542,7 @@ with st.form("config_form"):
     #add this back at some point maybe
     #metric_rollup = st.checkbox("Rollup metrics?", value=False)
     pull_snapshots = st.checkbox("Get Snapshots?", value=False)
+    first_in_chain = st.checkbox("Capture only first in chain snapshots?", value=True)
     debug_output = st.checkbox("Debug output?", value=False)
 
     # Submit button
@@ -550,7 +551,7 @@ with st.form("config_form"):
 if submitted:
     # Update global variables with user input
     global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
-        APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS, CALC_AVAILABILITY
+        APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS, FIRST_IN_CHAIN, CALC_AVAILABILITY
     print(f"account_name={account_name}, api_client={api_client}, api_key={api_key}, a[[;ocatopm_id={application_id}]]")
     APPDYNAMICS_ACCOUNT_NAME = account_name
     APPDYNAMICS_API_CLIENT = api_client
@@ -575,6 +576,11 @@ if submitted:
         PULL_SNAPSHOTS = True
     else:
         PULL_SNAPSHOTS = False
+
+    if first_in_chain:
+        FIRST_IN_CHAIN = "true"
+    else:
+        FIRST_IN_CHAIN = "false"
 
     # Replace with the desired output file path and name or leave as it to create dynamically (recommended)
     OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"_analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"

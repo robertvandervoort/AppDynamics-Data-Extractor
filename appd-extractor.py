@@ -129,6 +129,11 @@ def handle_rest_errors(func):
 
 def urlencode_string(text):
     """make app, tier or node names URL compatible for the REST call"""
+    #if the type is not string, make it one
+    if not isinstance(text, str):
+        print(f"converting {text} to a string.")
+        text = str(text)
+    
     # Replace spaces with '%20'
     text = text.replace(' ', '%20')
 
@@ -138,20 +143,22 @@ def urlencode_string(text):
 
     return encoded_text
 
-@handle_rest_errors
+#@handle_rest_errors
 def get_metric(object_type, app, tier, agenttype, node):
     """fetches last known agent availability info from tier or node level."""
-    tier = urlencode_string(tier)
-    app = urlencode_string(app)
     if DEBUG:
         print(f"        --- Begin get_metric({object_type},{app},{tier},{agenttype},{node})")
+
+    tier = urlencode_string(tier)
+    app = urlencode_string(app)
+    node = urlencode_string(node)
 
     if object_type == "node":
         print("        --- Querying node availability.")
         if agenttype == "MACHINE_AGENT":
             metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CIndividual%20Nodes%7C" + node + "%7CAgent%7CMachine%7CAvailability"
         else:
-            metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CIndividual%20Nodes%7C" + node + "%7CAgent%7CApp%7CAvailability"
+           metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CIndividual%20Nodes%7C" + node + "%7CAgent%7CApp%7CAvailability"
     
     elif object_type == "tier":
         print("        --- Querying tier availability.")
@@ -173,6 +180,7 @@ def get_metric(object_type, app, tier, agenttype, node):
         verify = VERIFY_SSL
     )
 
+    print(f"Metric response raw: {metric_response}")
     return metric_response
 
 def convert_epoch_timestamp(timestamp):
@@ -233,8 +241,13 @@ def validate_json(response):
 
     try:
         if DEBUG:
-            print(f"        --- validate_json() - incoming response type:: {type(response)}, length: {len(response)}")
-            #print(f"        --- validate_json() - incoming response:{response}")
+            if isinstance(response, requests.Response):  
+                if response.headers.get('content-type') == 'application/json':
+                    print(f"        --- validate_json() - incoming response type:: {type(response)}, length: {len(response.json())}")
+                else:
+                    print(f"        --- validate_json() - incoming response type:: {type(response)}, length: {len(response.content)}")
+            else:
+                print(f"        --- validate_json() - incoming response type:: {type(response)}, length: {len(response)}")
         
         if isinstance(response, tuple): 
             #unpack response
@@ -254,6 +267,7 @@ def validate_json(response):
         
         elif isinstance(response, requests.Response):  
             data = response.json()
+            data_status = "valid"
 
         elif isinstance(response, dict):  
             # Handle dictionaries directly
@@ -513,18 +527,20 @@ def debug_df(df, df_name, num_lines=10):
     st.write(df.head(num_lines).to_markdown(index=False, numalign='left', stralign='left'))
 
 # --- MAIN (Streamlit UI) ---
-st.title("AppDynamics Data Extractor")
+st.title("AppDynamics Data Extractor (not DEXTER)")
 
 # --- user config form
 with st.form("config_form"):
     account_name = st.text_input("Account Name", value="")
     api_client = st.text_input("API client name", value="")
     api_key = st.text_input("API Key", type="password", value="")
+    
     application_id = st.text_input("Application ID (optional)", value="")
-    metric_duration_mins = st.text_input("Metric duration (mins)", value="60")
-    metric_rollup = st.checkbox("Metric Rollup?", value=False)
-
-    # Checkbox for getting snapshots
+    
+    calc_availability = st.checkbox("Analyze availability?", value=False)
+    metric_duration_mins = st.text_input("How far to look back for data / snapshots (mins)", value="60")
+    #add this back at some point maybe
+    #metric_rollup = st.checkbox("Rollup metrics?", value=False)
     pull_snapshots = st.checkbox("Get Snapshots?", value=False)
     debug_output = st.checkbox("Debug output?", value=False)
 
@@ -534,19 +550,26 @@ with st.form("config_form"):
 if submitted:
     # Update global variables with user input
     global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
-        APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS
+        APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS, CALC_AVAILABILITY
     print(f"account_name={account_name}, api_client={api_client}, api_key={api_key}, a[[;ocatopm_id={application_id}]]")
     APPDYNAMICS_ACCOUNT_NAME = account_name
     APPDYNAMICS_API_CLIENT = api_client
     APPDYNAMICS_API_CLIENT_SECRET = api_key
     APPLICATION_ID = application_id
     DEBUG = debug_output
+    
+    if calc_availability:
+        CALC_AVAILABILITY = True
+    else:
+        CALC_AVAILABILITY = False
+
     METRIC_DURATION_MINS = metric_duration_mins
 
-    if metric_rollup:
-        METRIC_ROLLUP = True
-    else:
-        METRIC_ROLLUP = False
+    # add this back at some point maybe
+    #if metric_rollup:
+    #    METRIC_ROLLUP = "true"
+    #else:
+    METRIC_ROLLUP = "false"
 
     if pull_snapshots:
         PULL_SNAPSHOTS = True
@@ -582,16 +605,17 @@ if submitted:
             if DEBUG:
                 debug_df(applications_df, "applications_df")
 
-            # Initialize empty DataFrames
+            # Initialize empty DataFrames for aggregate storage
             information_df = pd.DataFrame()
             all_bts_df = pd.DataFrame()
             all_tiers_df = pd.DataFrame()
             all_nodes_df = pd.DataFrame()
             all_backends_df = pd.DataFrame()
+            all_healthRules_df = pd.DataFrame()
             all_snapshots_df = pd.DataFrame()
             all_snapshots_merged_df = pd.DataFrame()
 
-            #get current date and time for info sheet
+            #get current date and time and build info sheet - shoutout to Peter Wivagg for the suggestion
             now = datetime.datetime.now()
             current_date_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -607,6 +631,7 @@ if submitted:
                 tiers_df = pd.DataFrame()
                 nodes_df = pd.DataFrame()
                 backends_df = pd.DataFrame()
+                healthRules_df = pd.DataFrame()
                 snapshots_df = pd.DataFrame()
                 
                 app_id = application["app_id"]
@@ -665,6 +690,25 @@ if submitted:
                         "id": "node_id",
                         "name": "node_name"
                     })
+
+                    if CALC_AVAILABILITY:
+                        # Function to apply to each row
+                        
+                        def get_last_seen(row):
+                            availability_response = get_metric("node", app_name, row['tierName'], row['agentType'], row['node_name'])
+                            availability_data, availability_data_status = validate_json(availability_response)
+
+                            if availability_data_status == "valid":
+                                last_seen, _ = handle_metric_response(availability_data, availability_data_status)
+                                return last_seen
+                            else:
+                                return None  # or a default value if desired
+
+                        # Apply the function and create the new column
+                        nodes_df['last_seen'] = nodes_df.apply(get_last_seen, axis=1)
+
+                        # (Optional) Filter out rows where last_seen is None
+                        # nodes_df = nodes_df.dropna(subset=['last_seen'])
 
                     all_nodes_df = pd.concat([all_nodes_df, nodes_df])
 

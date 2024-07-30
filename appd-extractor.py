@@ -158,7 +158,7 @@ def get_metric(object_type, app, tier, agenttype, node):
         if agenttype == "MACHINE_AGENT":
             metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CIndividual%20Nodes%7C" + node + "%7CAgent%7CMachine%7CAvailability"
         else:
-           metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CIndividual%20Nodes%7C" + node + "%7CAgent%7CApp%7CAvailability"
+            metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CIndividual%20Nodes%7C" + node + "%7CAgent%7CApp%7CAvailability"
     
     elif object_type == "tier":
         print("        --- Querying tier availability.")
@@ -672,6 +672,28 @@ if submitted:
                         "id": "tier_id",
                         "name": "tier_name"
                     })
+
+                    if CALC_AVAILABILITY:
+                        # Function to apply to each row
+                        
+                        def get_last_seen(row):
+                            availability_response = get_metric("tier", app_name, row['tier_name'], row['agentType'], "")
+                            availability_data, availability_data_status = validate_json(availability_response)
+
+                            if availability_data_status == "valid":
+                                last_seen, last_seen_count = handle_metric_response(availability_data, availability_data_status)
+                                return last_seen, last_seen_count
+                            else:
+                                return None  # or a default value if desired
+
+                        result_series = tiers_df.apply(get_last_seen, axis=1)  # Get Series of tuples
+
+                        # Extract values from the Series of tuples
+                        tiers_df['last_seen'] = result_series.str[0]  # First element (last_seen)
+                        tiers_df['last_seen_count'] = result_series.str[1]  # Second element (last_seen_count)
+
+                        # (Optional) Filter out rows where last_seen is None
+                        # tiers_df = toers_df.dropna(subset=['last_seen'])
 
                     all_tiers_df = pd.concat([all_tiers_df, tiers_df])
 

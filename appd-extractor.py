@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import yaml
 
 import datetime
 from io import StringIO
@@ -18,6 +19,20 @@ VERIFY_SSL = True
 last_token_fetch_time = ""
 token_expiration = 300
 expiration_buffer = 30
+
+def load_secrets():
+    """Loads API credentials from secrets.yml if it exists."""
+    try:
+        with open("secrets.yml", "r") as file:
+            secrets_data = yaml.safe_load(file)
+            return secrets_data.get("secrets", [])  # Default to empty list if not found
+    except FileNotFoundError:
+        return []  # Return an empty list if the file doesn't exist
+
+def save_secrets(secrets_data):
+    """Saves API credentials to secrets.yml."""
+    with open("secrets.yml", "w") as file:
+        yaml.dump({"secrets": secrets_data}, file, default_flow_style=False)
 
 def authenticate(state):
     """get XCSRF token for use in this session"""
@@ -529,11 +544,43 @@ def debug_df(df, df_name, num_lines=10):
 # --- MAIN (Streamlit UI) ---
 st.title("AppDynamics Data Extractor (not DEXTER)")
 
-# --- user config form
+# --- Load secrets and set initial values ---
+secrets = load_secrets()
+selected_account = ""
+api_client_name = ""
+api_key = ""
+
+if secrets:
+    selected_account = secrets[0].get("account", "")
+    api_client_name = secrets[0].get("api-client-name", "")
+    api_key = secrets[0].get("api-key", "")
+    account_options = [secret["account"] for secret in secrets] + ["Enter Manually"]
+    selected_account = st.selectbox("Account Name", options=account_options, index=account_options.index(selected_account) if selected_account in account_options else 0)
+
+    # Input/select behavior
+    if selected_account == "Enter Manually":
+        account_name = st.text_input("Account Name", value="")
+    else:
+        account_name = selected_account  # Use the selected value directly
+
+    # Populate fields dynamically based on account name
+    api_client_name = ""  # Reset to empty
+    api_key = ""
+    for secret in secrets:
+        if secret["account"] == account_name:
+            api_client_name = secret.get("api-client-name", "")
+            api_key = secret.get("api-key", "")
+            break
+
+# --- User config form ---
 with st.form("config_form"):
-    account_name = st.text_input("Account Name", value="")
-    api_client = st.text_input("API client name", value="")
-    api_key = st.text_input("API Key", type="password", value="")
+    if not secrets:
+        account_name = st.text_input("Account Name", value="")
+    api_client = st.text_input("API client name", value=api_client_name)
+    api_key = st.text_input("API Key", type="password", value=api_key)
+
+    # Save button
+    save_button = st.form_submit_button("Save Credentials")
     
     application_id = st.text_input("Application ID (optional)", value="")
     
@@ -549,6 +596,23 @@ with st.form("config_form"):
 
     # Submit button
     submitted = st.form_submit_button("Extract Data")
+
+if save_button:
+    # Update secrets.yml with user input
+    new_secrets = []
+    for secret in secrets:
+        if secret["account"] == account_name:
+            secret["api-client-name"] = api_client
+            secret["api_key"] = api_key
+        new_secrets.append(secret)
+    if account_name not in account_options:  # Add only if it's a new account
+        new_secrets.append({
+            "account": account_name,
+            "api-client-name": api_client,
+            "api-key": api_key
+        })
+    save_secrets(new_secrets)
+    st.success("Credentials saved!")
 
 if submitted:
     # Update global variables with user input

@@ -430,7 +430,7 @@ def get_app_backends(application_id):
 @handle_rest_errors
 def get_snapshots(application_id):
     """Gets snapshot data from an application"""
-    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&first-in-chain=" + FIRST_IN_CHAIN + "&need-exit-calls=true&need-props=true&maximum-results=1000000&output=json"
+    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&first-in-chain=" + FIRST_IN_CHAIN + "&need-exit-calls=" + NEED_EXIT_CALLS + "&need-props=" + NEED_PROPS + "&maximum-results=1000000&output=json"
 
     if DEBUG:
         print("    --- Fetching snapshots from: "+ snapshots_url)
@@ -543,6 +543,8 @@ with st.form("config_form"):
     #metric_rollup = st.checkbox("Rollup metrics?", value=False)
     pull_snapshots = st.checkbox("Get Snapshots?", value=False)
     first_in_chain = st.checkbox("Capture only first in chain snapshots?", value=True)
+    need_exit_calls = st.checkbox("Return exit call data with snapshots?", value=False)
+    need_props = st.checkbox("Return data collector data with snapshots?", value=False)
     debug_output = st.checkbox("Debug output?", value=False)
 
     # Submit button
@@ -581,6 +583,16 @@ if submitted:
         FIRST_IN_CHAIN = "true"
     else:
         FIRST_IN_CHAIN = "false"
+
+    if need_exit_calls:
+        NEED_EXIT_CALLS = "true"
+    else:
+        NEED_EXIT_CALLS = "false"
+    
+    if need_props:
+        NEED_PROPS = "true"
+    else:
+        NEED_PROPS = "false"
 
     # Replace with the desired output file path and name or leave as it to create dynamically (recommended)
     OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"_analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
@@ -770,10 +782,34 @@ if submitted:
                     if snapshots_status == "valid":
                         snapshots_df = pd.DataFrame(snapshots)
                         snapshots_df['app_id'] = app_id
+                        
                         if DEBUG:
                             #input("main code - snapshots status is valid")
                             print()
                             debug_df(snapshots_df, "snapshots_df")
+                        
+                        def contruct_snapshot_link(row):
+                            #make the id fields strings so they can be concatenated into a URL
+                            request_guid = str(row['requestGUID'])
+                            app_id = str(row['app_id'])
+                            bt_id = str(row['businessTransactionId'])
+                            
+                            serverStartTime = row['serverStartTime']
+                            a = serverStartTime-1800000
+                            b = serverStartTime+1800000
+                            sst_begin = str(a)
+                            sst_end = str(b)
+
+                            snapshot_link = BASE_URL + "/controller/#/location=APP_SNAPSHOT_VIEWER&requestGUID=" + request_guid + "&application=" + app_id + "&businessTransaction=" + bt_id + "&rsdTime=Custom_Time_Range.BETWEEN_TIMES." + sst_end + "." + sst_begin + ".60" + "&tab=overview&dashboardMode=force"
+                            
+                            if DEBUG:
+                                print(f"--- Constructed snapshot link: {snapshot_link}")
+                            return snapshot_link
+
+
+                        # Apply the function and create the new column
+                        snapshots_df['snapshot_link'] = snapshots_df.apply(contruct_snapshot_link, axis=1)
+
                         all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
                         #if DEBUG:
                             #debug_df(all_snapshots_df, "all_snapshots_df")

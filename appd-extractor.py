@@ -870,9 +870,16 @@ if submitted:
                                 print(f"--- Constructed snapshot link: {snapshot_link}")
                             return snapshot_link
 
+                        def convert_snapshot_time(row):
+                            epochtimestamp = row['serverStartTime']
+                            result = convert_epoch_timestamp(epochtimestamp)
+                            return result
 
-                        # Apply the function and create the new column
+                        # create deep links for the snapshots
                         snapshots_df['snapshot_link'] = snapshots_df.apply(contruct_snapshot_link, axis=1)
+
+                        # convert the epoch timestamps to datetime
+                        snapshots_df['start_time'] = snapshots_df.apply(convert_snapshot_time, axis=1)
 
                         all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
                         #if DEBUG:

@@ -10,6 +10,7 @@ import json
 import urllib.parse
 import time
 import sys
+import gc
 
 #--- CONFIGURATION SECTION ---
 # Verify SSL certificates - should only be set false for on-prem controllers. Use this if the script fails right off the bat and gives you errors to the point..
@@ -487,10 +488,12 @@ def get_bts(application_id):
         print(f"    --- get_bts response: {bts_response.text}")
 
     #check for empty dataset
-    print("length of bts_response")
-    print (len(bts_response.content.strip()))
+    if DEBUG:
+        print(f"length of bts_response {(len(bts_response.content.strip()))}")
+    
     if not bts_response.content.decode().strip():  # Check for empty XML (after decoding)
         return pd.DataFrame(), "empty"
+    
     else:
         try:
             # Parse the XML content to get the root
@@ -532,6 +535,26 @@ def get_healthRules(application_id):
     #    print(f"    --- get_healthRules response: {healthRules_response.text}")
 
     return healthRules_response    
+
+@handle_rest_errors
+def get_servers():
+    '''Get a list of all servers'''
+    servers_url = BASE_URL + "/controller/sim/v2/user/machines"
+    if DEBUG:
+        print(f"    --- Retrieving Servers from {servers_url}")
+    else:
+        print("    --- Retrieving Servers...")
+
+    if not is_token_valid():
+        authenticate("reauth")
+
+    servers_response = requests.get(
+        servers_url,
+        headers = __session__.headers,
+        verify = VERIFY_SSL
+    )
+
+    return servers_response
 
 def debug_df(df, df_name, num_lines=10):
     """Displays DataFrame information in a more readable way."""
@@ -696,6 +719,8 @@ if submitted:
             all_healthRules_df = pd.DataFrame()
             all_snapshots_df = pd.DataFrame()
             all_snapshots_merged_df = pd.DataFrame()
+            all_servers_df = pd.DataFrame()
+            all_servers_merged_df = pd.DataFrame()
 
             #get current date and time and build info sheet - shoutout to Peter Wivagg for the suggestion
             now = datetime.datetime.now()
@@ -868,6 +893,7 @@ if submitted:
                             
                             if DEBUG:
                                 print(f"--- Constructed snapshot link: {snapshot_link}")
+
                             return snapshot_link
 
                         def convert_snapshot_time(row):
@@ -890,6 +916,23 @@ if submitted:
                         print ("            --- No snapshots returned")
                         st.write(f"No snapshots found for {app_name}.")
 
+            # get ALL the servers - I would do this just per app but association doesn't always happen like we want it to
+            st.write(f"Retrieving servers...")
+            servers_response = get_servers()
+            servers, servers_status = validate_json(servers_response)
+
+            if servers_status == "valid":
+                if DEBUG:
+                    print("        --- Writing all_servers_df...")
+                    st.write(f"Writing all_servers_df...")
+                all_servers_df = pd.DataFrame(servers)
+
+                if DEBUG:
+                    debug_df(all_servers_df, "all_servers_df")
+
+            else:
+                print(f"        --- No servers returned. Status: {servers_status} Response: {servers}")
+
             #merge the things
             # Join the DataFrames as needed
             if not all_snapshots_df.empty:
@@ -904,17 +947,67 @@ if submitted:
                     applications_df, left_on="applicationId", right_on="app_id", how="left", suffixes=(None, "_app")
                 )
 
+                #delete the all_snapshots_df to free up RAM
+                del all_snapshots_df
+                gc.collect()
+
                 #drop the redundant columns
                 if DEBUG:
                     print("Removing redundant columns from merge...")
-                else:
-                    st.write("Removing redundant columns from merge...")
-                
-                all_snapshots_merged_df.drop(columns=['app_id_tier','app_id_node','app_id_app','app_id','bt_id','entryPointTypeString'], inplace=True)
+
+                st.write("Doing some cleanup...")
+                    
+                all_snapshots_merged_df.drop(columns=['accountGuid','app_id_tier','app_id_node','app_id_app', 'agentType', 'applicationId', 'appAgentPresent', 'bt_id', 'description', 'entryPointTypeString', 'id', 'last_seen', 'last_seen_count', 'localID', 'numberOfNodes', 'tierId', 'tierId_bt', 'tierName', 'tierName_bt', 'tierId_bt', 'tierName_bt', 'type'], inplace=True)
+            
             else:
-                st.write("all_snapshots_df is empty, skipping merge...")
                 if DEBUG:
                     print("all_snapshots_df is empty, skipping merge...")
+                
+                st.write("all_snapshots_df is empty, skipping merge...")
+
+            #merge node and server data 
+            if not (all_nodes_df.empty & all_servers_df.empty):
+                if DEBUG:
+                    print("        --- Merging node and machine data.")
+                
+                st.write("Merging node and machine data...")
+                
+                all_nodes_merged_df = pd.merge (
+                    all_nodes_df, all_servers_df, left_on="machineName", right_on="name", how="left", suffixes=(None, "_servers")
+                )
+                
+                #delete the all_nodes_df to free up RAM
+                del all_nodes_df
+                gc.collect()
+
+                if DEBUG:
+                    debug_df(all_nodes_merged_df, "all_nodes_merged_df")
+
+                normalized_dataframes = {}
+
+                for column_name in ['properties', 'memory']:  # Replace with your column names
+                    normalized_dataframes[column_name] = pd.json_normalize(all_nodes_merged_df[column_name], sep='_')
+
+                # Merge the normalized DataFrames back into the original one
+                for df_name, df in normalized_dataframes.items():
+                    all_nodes_merged_df = all_nodes_merged_df.join(df)
+
+                # Drop the source columns now since we normalized them
+                all_nodes_merged_df = all_nodes_merged_df.drop(columns=['properties', 'memory'])
+
+                #drop unnecessary columns - maybe add options for this later
+                all_nodes_merged_df.drop(columns=['agentConfig', 'AppDynamics|Agent|JVM Info', 'AppDynamics|Agent|Agent Pid', 'AppDynamics|Agent|Agent version', 'AppDynamics|Agent|Build Number', 'AppDynamics|Agent|Install Directory', 'AppDynamics|Agent|Machine Info', 'controllerConfig', 'cpus', 'ipAddresses', 'networkInterfaces', 'Physical_type', 'Swap_type', 'volumes'], inplace=True)
+
+                #do some renaming
+                all_nodes_merged_df.rename(columns={
+                    'Physical_sizeMb': 'RAM_MB',
+                    'AppDynamics|Agent|Smart Agent Id': 'smart_agent_ID',
+                    'Processor|Logical Core Count': 'cores_logical',
+                    'Processor|Physical Core Count': 'cores_physical',
+                    'vCPU': 'cores_vCPU'
+                }, inplace=True) 
+
+            #--- start the output of all this data
 
             #change the output file name to include app name if this is against a single app
             if len(applications_df) == 1:
@@ -950,12 +1043,28 @@ if submitted:
                     ("Applications", applications_df),
                     ("BTs", all_bts_df),
                     ("Tiers", all_tiers_df),
-                    ("Nodes", all_nodes_df),
+                    ("Nodes", all_nodes_merged_df),
                     ("Backends", all_backends_df),
                     ("Snapshots", all_snapshots_merged_df),
+                    ("Servers", all_servers_df)
                 ]:
                     if not df.empty:
-                        print(f"Writing {df_name} DataFrame...")
+                        if DEBUG:
+                            print(f"Reordering {df_name} columns...")
+                        
+                        #put dataframes in alphabetical order
+                        st.write(f"Ordering {df_name}...")
+
+                        #convert all column names to strings
+                        df.columns = df.columns.astype(str)
+
+                        # Get a list of column names in alphabetical order
+                        column_order = sorted(df.columns)
+
+                        # Reorder the DataFrame's columns
+                        df = df[column_order]
+
+                        print(f"Writing {df} DataFrame...")
                         df.to_excel(writer, sheet_name=df_name, index=False)
                         
                         # Get the worksheet and apply formatting
@@ -963,7 +1072,10 @@ if submitted:
 
                         # Auto-adjust column widths and add formatting
                         for col_num, value in enumerate(df.columns.values):
-                            column_length = max(df[value].astype(str).map(len).max(), len(value))
+                            try:
+                                column_length = max(df[value].astype(str).map(len).max(), len(value))
+                            except:
+                                column_length = 10
                             worksheet.set_column(col_num, col_num, column_length + 3)
                             worksheet.write(0, col_num, value, header_format)  # Format header
                             
@@ -982,4 +1094,5 @@ if submitted:
                 st.write(f"No application data found for {application_id}")
             else:
                 st.write("No application data found.")
+
     status.update(label="Extraction complete!", state="complete", expanded=False)

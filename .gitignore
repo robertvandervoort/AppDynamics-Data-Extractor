@@ -161,4 +161,6 @@ cython_debug/
 *.xlsx
 *.xlsm
 .DS_Store
-secrets.yml.renamed.yml
+secrets.*
+secrets.yml
+secrets.yml

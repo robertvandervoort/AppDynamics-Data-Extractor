@@ -51,6 +51,8 @@ else
         echo "Installing requirements from $REQUIREMENTS_FILE..."
         # Activate the virtual environment first before installing requirements.
         . "$VENV_DIR"/bin/activate 
+        pip cache purge
+        pip install --upgrade pip setuptools wheel
         python3 -m pip install -r "$REQUIREMENTS_FILE" --disable-pip-version-check
 
         if [ $? -ne 0 ]; then
@@ -62,7 +64,7 @@ fi
 
 
 # Execute Python script with python3 (assuming it's within the venv)
-streamlit run appd-extractor.py
+python3 -m streamlit run appd-extractor.py
 
 # Optionally, deactivate the virtual environment after the script finishes
 deactivate 

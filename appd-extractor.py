@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import yaml
-
+import math
 import datetime
+import os
 from io import StringIO
 import xml.etree.ElementTree as ET
 import requests
@@ -10,9 +11,12 @@ import json
 import urllib.parse
 import time
 import sys
+import subprocess
 import gc
 
 #--- CONFIGURATION SECTION ---
+SNES = False
+
 # Verify SSL certificates - should only be set false for on-prem controllers. Use this if the script fails right off the bat and gives you errors to the point..
 VERIFY_SSL = True
 
@@ -150,20 +154,46 @@ def urlencode_string(text):
         print(f"converting {text} to a string.")
         text = str(text)
     
-    # Replace spaces with '%20'
-    text = text.replace(' ', '%20')
-
-    # Encode the string using the 'safe' scheme
-    safe_characters = '-_.!~*\'()[]+:;?,/=$&%'
-    encoded_text = urllib.parse.quote(text, safe=safe_characters)
+    encoded_text = urllib.parse.quote(text, safe='/', encoding=None, errors=None)
 
     return encoded_text
 
-#@handle_rest_errors
-def get_metric(object_type, app, tier, agenttype, node):
-    """fetches last known agent availability info from tier or node level."""
+@handle_rest_errors
+def get_SIM_availability(hierarchy_list, hostId, type):
+    """fetches last known server agent availability info. returns requests.Response object"""
     if DEBUG:
-        print(f"        --- Begin get_metric({object_type},{app},{tier},{agenttype},{node})")
+        print(f"        --- Begin get_SIM_availability({hierarchy_list}, {hostId})")
+    
+    #PHYSICAL server URL example
+    #https://customer1.saas.appdynamics.com/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7CAppName%5C%7COwners%5C%7CEnvironment%7CIndividual%20Nodes%7C<hostId>%7CHardware%20Resources%7CMachine%7CAvailability&time-range-type=BEFORE_NOW&duration-in-mins=60
+    #CONTAINER server URL example - have to use CPU
+    #https://customer1.saas.appdynamics.com/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7CContainers%7CIndividual%20Nodes%7C<hostId>%7CHardware%20Resources%7CCPU%7C%25Busy&time-range-type=BEFORE_NOW&duration-in-mins=60
+
+
+    #convert the hierarchy from the machine agent data into a URL encoded string
+    hierarchy = "%5C%7C".join(hierarchy_list)
+
+    #build the metric url using the hierarchy, hostId and metric duration
+    if type == "PHYSICAL": #use availability metric
+        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CMachine%7CAvailability&time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&output=json"
+    elif type == "CONTAINER": #use CPU busy since availability metric doesn't exist
+        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CCPU%7C%25Busy&time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&output=json"
+    if DEBUG:
+        print(f"        --- SIM availability metric url: {metric_url}")
+
+    metric_response = requests.get(
+        metric_url,
+        headers = __session__.headers,
+        verify = VERIFY_SSL
+    )
+
+    return metric_response
+
+@handle_rest_errors
+def get_apm_availability(object_type, app, tier, agenttype, node):
+    """fetches last known agent availability info from tier or node level. returns requests.Response object"""
+    if DEBUG:
+        print(f"        --- Begin get_apm_availability({object_type},{app},{tier},{agenttype},{node})")
 
     tier = urlencode_string(tier)
     app = urlencode_string(app)
@@ -178,11 +208,10 @@ def get_metric(object_type, app, tier, agenttype, node):
     
     elif object_type == "tier":
         print("        --- Querying tier availability.")
-        metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CAgent%7CApp%7CAvailability"
-        
-    # If the machine agents were assigned a tier, the tier reads as an app agent. The availability data would be here instead
-    # metric_path = "Application%20Infrastructure%20Performance%7C" + tier_name + "%7CAgent%7CMachine%7CAvailability"
-    # future enhancement will reflect the number and last seen for machine agent tiers.
+        if agenttype == "MACHINE_AGENT":
+            metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CAgent%7CMachine%7CAvailability"
+        else:
+            metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CAgent%7CApp%7CAvailability"
 
     metric_url = BASE_URL + "/controller/rest/applications/" + app + "/metric-data?metric-path=" + metric_path + "&time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&rollup=" + METRIC_ROLLUP + "&output=json"
                                 
@@ -196,57 +225,28 @@ def get_metric(object_type, app, tier, agenttype, node):
         verify = VERIFY_SSL
     )
 
-    print(f"Metric response raw: {metric_response}")
     return metric_response
 
-def convert_epoch_timestamp(timestamp):
-    """used for converting AppD timestamps to human readable form"""
-    #if DEBUG:
-    #    print(f"        --- Performing datetime calculation on value: {timestamp}")
-    
-    #convert EPOCH to human readable datetime - we have to divide by 1000 because we show EPOCH in ms not seconds
-    epoch = (timestamp/1000)
-    dt = datetime.datetime.fromtimestamp(epoch)
-    return dt
+def return_apm_availability(metric_response):
+    '''validate the returned APM availability response, extracts the metric data and returns the last seen time and count'''
+    data, status = validate_json(metric_response)
 
-def handle_metric_response(metric_data, metric_data_status):
-    """Processes returned metric JSON data"""
-    if DEBUG:
-        print("        --- handle_metric_response() - Handling metric data...")
-        print(f"        --- handle_metric_response() - metric_data: {metric_data}")
-        print(f"        --- handle_metric_response() - metric_data type: {type(metric_data)}")
-        print(f"        --- handle_metric_response() - metric_data_status: {metric_data_status}")
+    if status != "valid":
+        if DEBUG:
+            print(f"Validation of APM availability data failed. Status: {status} Data: {data}")
+            return None, None
 
-    if metric_data_status == "valid":
-        if metric_data == []:
-            dt = "METRIC DATA NOT FOUND IN TIME RANGE"
-            print(dt)
-            return dt, metric_data_status
-
-        if metric_data[-1]['metricName'] == "METRIC DATA NOT FOUND":
-            dt = "METRIC DATA NOT FOUND IN TIME RANGE"
-            print(dt)
-            return dt, metric_data_status
-
-        elif metric_data[-1]['metricValues'][-1]['startTimeInMillis']:
-            last_start_time_millis = metric_data[-1]['metricValues'][-1]['startTimeInMillis']
-            dt = convert_epoch_timestamp(last_start_time_millis)
-            value = metric_data[-1]['metricValues'][-1]['current']
-            if DEBUG:
-                print(f"            --- dt: {dt} value: {value}")
-            return dt, value
-
-    elif metric_data_status == "empty":
-        dt = "EMPTY RESPONSE"
-        return dt, metric_data_status
-    
-    elif metric_data_status == "error":
-        dt = "ERROR"
-        return dt, metric_data_status
-    
-    elif metric_data == []:
-        dt = "EMPTY RESPONSE"
-        return dt, metric_data_status
+    if status == "valid":
+        try:
+            epoch, value = determine_availability(data, status)
+            return epoch, value
+        
+        except Exception as e:
+            st.write(f"Unexpected error during validation: of APM availability data: {e}")
+            print(f"Unexpected error during validation: of APM availability data: {e}")
+            print(f"data: {data}")
+            input("press a key...")
+            return None, None      
 
 def validate_json(response):
     """validation function to parse into JSON and catch empty sets returned from our API requests"""
@@ -269,10 +269,12 @@ def validate_json(response):
             #unpack response
             data, data_status = response
             
-            #pass error and exceptions from the response along to the main code
+            #handle error and exceptions from the response
             if data_status != "valid":
                 if DEBUG:
-                    print(f"        --- response data is not valid. status = {data_status}")
+                    st.write(f"Response validation error! status = {data_status}, data = {data}")
+                    print(f"        --- response data is not valid. status = {data_status}, data = {data}")
+                return None, data_status
 
             else:
                 if DEBUG:
@@ -289,21 +291,52 @@ def validate_json(response):
             # Handle dictionaries directly
             data = response
             data_status = "valid"
-
+            
         # check for empty JSON object
-        if not data:
+        if not data or data == [] or data == "":
             if DEBUG:
-                print("            --- The resulting JSON object judged as empty")
-                print(f"            --- data: {data}")
-            data_status = "empty"
+                print(f"            --- The resulting JSON object is empty. data = {data}")
+            return None, "empty"
     
+        #if the data made it this far, then...
         return data, data_status
 
     except json.JSONDecodeError:
         # The data is not valid JSON.
         if DEBUG:
             print("            --- The data is not valid JSON.")
+            print(response.text)
         return None, "error"
+
+def determine_availability(metric_data, metric_data_status):
+    """Processes returned metric JSON data"""
+    if DEBUG:
+        print("        --- handle_metric_response() - Handling metric data...")
+        print(f"        --- handle_metric_response() - metric_data: {metric_data}")
+        print(f"        --- handle_metric_response() - metric_data type: {type(metric_data)}")
+        print(f"        --- handle_metric_response() - metric_data_status: {metric_data_status}")
+    
+    if metric_data[-1]['metricName'] == "METRIC DATA NOT FOUND":
+        if DEBUG:
+            print("METRIC DATA NOT FOUND IN TIME RANGE")
+            return None, None
+    
+    if metric_data[-1]['metricValues'][-1]['startTimeInMillis']:
+        last_start_time_millis = metric_data[-1]['metricValues'][-1]['startTimeInMillis']
+        value = metric_data[-1]['metricValues'][-1]['current']
+        if DEBUG:
+            print(f"            --- startTimeInMillis: {last_start_time_millis} current: {value}")
+
+        return last_start_time_millis, value
+    
+    elif metric_data == []:
+        if DEBUG:
+            print("METRIC DATA CAME BACK WITH EMPTY DICTIONARY")
+
+        return None, None
+
+    else:
+        return None, None
 
 @handle_rest_errors
 def get_applications():
@@ -446,7 +479,7 @@ def get_app_backends(application_id):
 @handle_rest_errors
 def get_snapshots(application_id):
     """Gets snapshot data from an application"""
-    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&first-in-chain=" + FIRST_IN_CHAIN + "&need-exit-calls=" + NEED_EXIT_CALLS + "&need-props=" + NEED_PROPS + "&maximum-results=1000000&output=json"
+    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(SNAPSHOT_DURATION_MINS) + "&first-in-chain=" + FIRST_IN_CHAIN + "&need-exit-calls=" + NEED_EXIT_CALLS + "&need-props=" + NEED_PROPS + "&maximum-results=1000000&output=json"
 
     if DEBUG:
         print("    --- Fetching snapshots from: "+ snapshots_url)
@@ -556,13 +589,114 @@ def get_servers():
 
     return servers_response
 
+def calculate_licenses(df):
+    license_data = []
+
+    for agent_type in ['APP_AGENT', 'DOT_NET_APP_AGENT', 'NODEJS_APP_AGENT', 'PYTHON_APP_AGENT',
+                       'PHP_APP_AGENT', 'GOLANG_SDK', 'WMB_AGENT', 'MACHINE_AGENT', 'DOT_NET_MACHINE_AGENT', 
+                       'NATIVE_WEB_SERVER', 'NATIVE_SDK']:
+
+        if agent_type == 'NATIVE_SDK':
+            agent_df = df[df['Node - Agent Type'] == agent_type]
+            sap_abap_df = agent_df[agent_df['App Agent Version'].str.contains('with HTTP SDK', na=False)]
+            cpp_df = agent_df[~agent_df['App Agent Version'].str.contains('with HTTP SDK', na=False)]
+
+            sap_abap_licenses = sap_abap_df['hostId'].nunique()
+            cpp_licenses = cpp_df['hostId'].nunique() // 3
+            if cpp_df['hostId'].nunique() % 3 > 0:
+                cpp_licenses += 1
+
+            license_data.append({'Agent Type': 'SAP ABAP Agent', 'Licenses Required': sap_abap_licenses})
+            license_data.append({'Agent Type': 'C++ Agent', 'Licenses Required': cpp_licenses})
+
+        else:
+            agent_df = df[df['Node - Agent Type'] == agent_type]
+            container_df = agent_df[agent_df['Server Type'] == 'CONTAINER']
+            physical_df = agent_df[agent_df['Server Type'] == 'PHYSICAL']
+
+            if agent_type in ['DOT_NET_APP_AGENT', 'PYTHON_APP_AGENT', 'WMB_AGENT', 'NATIVE_SDK', 
+                              'MACHINE_AGENT', 'DOT_NET_MACHINE_AGENT', 'NATIVE_WEB_SERVER']:
+                container_licenses = container_df['hostId'].nunique()
+                physical_licenses = physical_df['hostId'].nunique()
+            elif agent_type in ['APP_AGENT', 'PHP_APP_AGENT']:
+                container_licenses = container_df['Node Name'].nunique()
+                physical_licenses = physical_df['Node Name'].nunique()
+            elif agent_type == 'NODEJS_APP_AGENT':
+                container_licenses = 0
+                physical_licenses = 0
+                for host_id in agent_df['hostId'].unique():
+                    host_df = agent_df[agent_df['hostId'] == host_id]
+                    container_host_df = host_df[host_df['Server Type'] == 'CONTAINER']
+                    physical_host_df = host_df[host_df['Server Type'] == 'PHYSICAL']
+                    container_licenses += (container_host_df['Node Name'].nunique() // 10)
+                    if container_host_df['Node Name'].nunique() % 10 > 0:
+                        container_licenses += 1
+                    physical_licenses += (physical_host_df['Node Name'].nunique() // 10)
+                    if physical_host_df['Node Name'].nunique() % 10 > 0:
+                        physical_licenses += 1
+            elif agent_type == 'GOLANG_SDK':
+                container_licenses = (container_df['Node Name'].nunique() // 3)
+                if container_df['Node Name'].nunique() % 3 > 0:
+                    container_licenses += 1
+                physical_licenses = (physical_df['Node Name'].nunique() // 3)
+                if physical_df['Node Name'].nunique() % 3 > 0:
+                    physical_licenses += 1
+
+            microservices_licenses = math.ceil(container_licenses / 5)
+            standard_licenses = physical_licenses
+
+            #use the names everyone knows
+            if agent_type != "NATIVE_SDK":
+                if agent_type == 'APP_AGENT':
+                    agent_type = 'Java Agent'
+                if agent_type == 'DOT_NET_APP_AGENT':
+                    agent_type = '.NET Agent'
+                if agent_type == 'NODEJS_APP_AGENT':
+                    agent_type = 'NodeJS Agent'
+                if agent_type == 'PYTHON_APP_AGENT':
+                    agent_type = 'Python Agent'
+                if agent_type == 'PHP_APP_AGENT':
+                    agent_type = "PHP Agent"
+                if agent_type == 'GOLANG_SDK':
+                    agent_type = 'Go Agent'
+                if agent_type == 'WMB_AGENT':
+                    agent_type = 'IIB Agent'
+                if agent_type == 'MACHINE_AGENT':
+                    agent_type = 'Machine Agent'
+                if agent_type == 'DOT_NET_MACHINE_AGENT':
+                    agent_type = '.NET Machine Agent'
+                if agent_type == 'NATIVE_WEB_SERVER':
+                    agent_type = 'Apache Agent'    
+                
+            license_data.append({
+                'Agent Type': agent_type,
+                'Container Nodes': container_df.shape[0],
+                'Physical Nodes': physical_df.shape[0],
+                'Physical Licenses (Mixed)': physical_licenses,
+                'Microservices Licenses (Mixed)': microservices_licenses,
+                'Standard Licenses': standard_licenses
+            })
+
+    license_usage_df = pd.DataFrame(license_data)
+    return license_usage_df
+
 def debug_df(df, df_name, num_lines=10):
     """Displays DataFrame information in a more readable way."""
     st.subheader(f"Debug Info: {df_name}")  # Use subheader instead of nested expander
-    st.write(f"Shape: {df.shape}")
-    st.write(f"Columns: {df.columns.to_list()}")
+    st.write(f"Shape (rows, cols): {df.shape}")
+    #st.write(f"Columns: {df.columns.to_list()}")
     st.write(f"First {num_lines} rows:")
     st.write(df.head(num_lines).to_markdown(index=False, numalign='left', stralign='left'))
+
+def play_sound(file, wait):
+    '''file = realtive path and filename to wave file, wait (Boolean) wait for the file to finish playing or not'''
+    try:
+        wave_obj = sa.WaveObject.from_wave_file(file)
+        play_obj = wave_obj.play()
+        if wait:
+            play_obj.wait_done()
+    except Exception as e:
+        print(f"Error playing sound: {e}")
 
 # --- MAIN (Streamlit UI) ---
 st.title("AppDynamics Data Extractor (not DEXTER)")
@@ -600,21 +734,29 @@ with st.form("config_form"):
     if not secrets:
         account_name = st.text_input("Account Name", value="")
     api_client = st.text_input("API client name", value=api_client_name)
-    api_key = st.text_input("API Key", type="password", value=api_key)
+    api_key = st.text_input("API client secret", type="password", value=api_key)
 
     # Save button
     save_button = st.form_submit_button("Save Credentials")
     
     application_id = st.text_input("Application ID (optional)", value="")
     
-    calc_availability = st.checkbox("Analyze availability?", value=False)
-    metric_duration_mins = st.text_input("How far to look back for data / snapshots (mins)", value="60")
+    "APM"
+    retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes)?", value=True)    
+    calc_availability = st.checkbox("Analyze tier, node and server availability?", value=False)
+    metric_duration_mins = st.text_input("How far to look back for availability? (mins)", value="60")
     #add this back at some point maybe
     #metric_rollup = st.checkbox("Rollup metrics?", value=False)
+    "Snapshots"
     pull_snapshots = st.checkbox("Get Snapshots?", value=False)
+    "Snapshot Options"
+    snapshot_duration_mins = st.text_input("How far to look back for snapshots? (mins)", value="60")
     first_in_chain = st.checkbox("Capture only first in chain snapshots?", value=True)
     need_exit_calls = st.checkbox("Return exit call data with snapshots?", value=False)
     need_props = st.checkbox("Return data collector data with snapshots?", value=False)
+    "Servers"
+    retrieve_servers = st.checkbox("Retrieve all machine agent data?", value=True)
+    normalize = st.checkbox("Break out server properties into columns?", value=False)
     debug_output = st.checkbox("Debug output?", value=False)
 
     # Submit button
@@ -637,7 +779,16 @@ if save_button:
     save_secrets(new_secrets)
     st.success("Credentials saved!")
 
-if submitted:
+# --- Main application code ---
+if submitted and (retrieve_apm or retrieve_servers):
+    if SNES:
+        # Request microphone access before playing any sounds
+        sd.default.device = None, sd.query_devices()[0]['name']  # Set default output device
+        with sd.InputStream(channels=1, samplerate=44100, callback=None): 
+            pass  # This will trigger the microphone access request
+
+        play_sound("sounds/smb_jump-small.wav", False)
+                
     # Update global variables with user input
     global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
         APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS, FIRST_IN_CHAIN, CALC_AVAILABILITY
@@ -646,25 +797,18 @@ if submitted:
     APPDYNAMICS_API_CLIENT = api_client
     APPDYNAMICS_API_CLIENT_SECRET = api_key
     APPLICATION_ID = application_id
+    METRIC_DURATION_MINS = metric_duration_mins
+    CALC_AVAILABILITY = calc_availability
+    PULL_SNAPSHOTS = pull_snapshots
+    SNAPSHOT_DURATION_MINS = snapshot_duration_mins
+    NORMALIZE = normalize
     DEBUG = debug_output
     
-    if calc_availability:
-        CALC_AVAILABILITY = True
-    else:
-        CALC_AVAILABILITY = False
-
-    METRIC_DURATION_MINS = metric_duration_mins
-
     # add this back at some point maybe
     #if metric_rollup:
     #    METRIC_ROLLUP = "true"
     #else:
     METRIC_ROLLUP = "false"
-
-    if pull_snapshots:
-        PULL_SNAPSHOTS = True
-    else:
-        PULL_SNAPSHOTS = False
 
     if first_in_chain:
         FIRST_IN_CHAIN = "true"
@@ -689,335 +833,598 @@ if submitted:
     BASE_URL = "https://"+APPDYNAMICS_ACCOUNT_NAME+".saas.appdynamics.com"
 
     # --- MAIN application code
+    # set this for later to keep the status window open if there are errors
+    keep_status_open = False
+
     with st.status("Extracting data...", expanded=True) as status:
         st.write(f"Logging into controller at {BASE_URL}...")
         authenticate("initial")
 
-        # Get applications for processing
-        st.write("Retrieving applications...")
-        applications_response = get_applications()
-        applications, applications_status = validate_json(applications_response)
+        # Initialize empty DataFrame
+        information_df = pd.DataFrame()
+        license_usage_df = pd.DataFrame()
+        applications_df = pd.DataFrame()
+        bts_df = pd.DataFrame()
+        tiers_df = pd.DataFrame()
+        nodes_df = pd.DataFrame()
+        backends_df = pd.DataFrame()
+        healthRules_df = pd.DataFrame()
+        snapshots_df = pd.DataFrame()
 
-        if applications_status == "valid":
-            applications_df = pd.DataFrame(applications)
-            applications_df = applications_df.rename(columns={
-                "id": "app_id",
-                "name": "app_name"
-            })
+        all_bts_df = pd.DataFrame()
+        all_tiers_df = pd.DataFrame()
+        all_nodes_df = pd.DataFrame()
+        all_nodes_merged_df = pd.DataFrame()
+        all_backends_df = pd.DataFrame()
+        all_healthRules_df = pd.DataFrame()
+        all_snapshots_df = pd.DataFrame()
+        all_snapshots_merged_df = pd.DataFrame()
+        all_servers_df = pd.DataFrame()
+        all_servers_merged_df = pd.DataFrame()
+        all_apm_merged_df = pd.DataFrame()
 
-            st.session_state['applications_df'] = applications_df  # Store in session state
+        if retrieve_apm:
+            # Get applications for processing
+            st.write("Retrieving applications...")
+            applications_response = get_applications()
+            applications, applications_status = validate_json(applications_response)
 
-            if DEBUG:
-                debug_df(applications_df, "applications_df")
-
-            # Initialize empty DataFrames for aggregate storage
-            information_df = pd.DataFrame()
-            all_bts_df = pd.DataFrame()
-            all_tiers_df = pd.DataFrame()
-            all_nodes_df = pd.DataFrame()
-            all_backends_df = pd.DataFrame()
-            all_healthRules_df = pd.DataFrame()
-            all_snapshots_df = pd.DataFrame()
-            all_snapshots_merged_df = pd.DataFrame()
-            all_servers_df = pd.DataFrame()
-            all_servers_merged_df = pd.DataFrame()
-
-            #get current date and time and build info sheet - shoutout to Peter Wivagg for the suggestion
-            now = datetime.datetime.now()
-            current_date_time = now.strftime("%Y-%m-%d %H:%M:%S")
-
-            information_df = pd.DataFrame({
-                "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "APPDYNAMICS_API_CLIENT_SECRET", "APPLICATION_ID", "METRIC_DURATION_MINS", "METRIC_ROLLUP", "PULL_SNAPSHOTS"],
-                "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, "xxx", APPLICATION_ID, METRIC_DURATION_MINS, METRIC_ROLLUP, PULL_SNAPSHOTS]
-            })
-
-            # Process each application
-            for _, application in applications_df.iterrows():
-                #initialize DataFrames
-                bts_df = pd.DataFrame()
-                tiers_df = pd.DataFrame()
-                nodes_df = pd.DataFrame()
-                backends_df = pd.DataFrame()
-                healthRules_df = pd.DataFrame()
-                snapshots_df = pd.DataFrame()
+            if applications_status == "valid":
+                applications_df = pd.DataFrame(applications)
+                applications_df = applications_df.rename(columns={
+                    "id": "app_id",
+                    "name": "app_name"
+                })
                 
-                app_id = application["app_id"]
-                app_name = application["app_name"]
+                #st.session_state['applications_df'] = applications_df  # Store in session state
 
-                # Get and process business transactions
-                st.write(f"Retrieving business transactions for {app_name}...")
-                bts_response = get_bts(app_id)
-                bts_data, bts_status = bts_response
+                if DEBUG:
+                    debug_df(applications_df, "applications_df")
+
+                st.write(f"Found {applications_df.shape[0]} applications.")
+
+                if SNES:
+                    play_sound("sounds/smb_coin.wav", False)
                 
-                if bts_status == "valid":
-                    bts_df['app_id'] = app_id
-                    bts_df = pd.DataFrame(bts_data)
-                    bts_df = bts_df.rename(columns={
-                        "id": "bt_id",
-                        "name": "bt_name"
-                    })
+                #get current date and time and build info sheet - shoutout to Peter Wivagg for the suggestion
+                now = datetime.datetime.now()
+                current_date_time = now.strftime("%Y-%m-%d %H:%M:%S")
+
+                information_df = pd.DataFrame({
+                    "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "APPDYNAMICS_API_CLIENT_SECRET", "APPLICATION_ID", "METRIC_DURATION_MINS", "METRIC_ROLLUP", "PULL_SNAPSHOTS"],
+                    "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, "xxx", APPLICATION_ID, METRIC_DURATION_MINS, METRIC_ROLLUP, PULL_SNAPSHOTS]
+                })
+
+                # Process each application
+                st.write(f"Processing applications...")
+
+                for _, application in applications_df.iterrows():
+                    app_id = application["app_id"]
+                    app_name = application["app_name"]
+
+                    # Get and process business transactions
+                    st.write(f"Retrieving business transactions for {app_name}...")
+                    bts_response = get_bts(app_id)
+                    bts_data, bts_status = bts_response
                     
-                    all_bts_df = pd.concat([all_bts_df, bts_df])
+                    if bts_status == "valid":
+                        if SNES:
+                            play_sound("sounds/smb_coin.wav", False)
+                            
+                        bts_df['app_id'] = app_id
+                        bts_df = pd.DataFrame(bts_data)
+                        bts_df = bts_df.rename(columns={
+                            "id": "bt_id",
+                            "name": "bt_name"
+                        })
 
-                    if DEBUG:
-                        print(f"App id:{app_id}")
-                        debug_df(bts_df, "bts_df")
-                        #input("PRESS ANY KEY")
-                elif bts_status == "empty":
-                    bts_df = pd.DataFrame()
-                    if DEBUG:
-                        print("BT DATAFRAME EMPTY")
-                
-                # Get and process tiers
-                st.write(f"Retrieving tiers for {app_name}...")
-                tiers_response = get_tiers(app_id)
-                tiers, tiers_status = validate_json(tiers_response)
-                if tiers_status == "valid":
-                    tiers_df = pd.DataFrame(tiers)
-                    tiers_df['app_id'] = app_id
-                    tiers_df = tiers_df.rename(columns={
-                        "id": "tier_id",
-                        "name": "tier_name"
-                    })
+                        if DEBUG:
+                            print(f"App id:{app_id}")
+                            debug_df(bts_df, "bts_df")
 
-                    if CALC_AVAILABILITY:
-                        # Function to apply to each row
+                        st.write(f"Found {bts_df.shape[0]} business transactions.")
                         
-                        def get_last_seen(row):
-                            availability_response = get_metric("tier", app_name, row['tier_name'], row['agentType'], "")
-                            availability_data, availability_data_status = validate_json(availability_response)
+                        if SNES:
+                            play_sound("sounds/smb_coin.wav", False)
 
-                            if availability_data_status == "valid":
-                                last_seen, last_seen_count = handle_metric_response(availability_data, availability_data_status)
-                                return last_seen, last_seen_count
-                            else:
-                                return None  # or a default value if desired
+                        all_bts_df = pd.concat([all_bts_df, bts_df])
 
-                        result_series = tiers_df.apply(get_last_seen, axis=1)  # Get Series of tuples
-
-                        # Extract values from the Series of tuples
-                        tiers_df['last_seen'] = result_series.str[0]  # First element (last_seen)
-                        tiers_df['last_seen_count'] = result_series.str[1]  # Second element (last_seen_count)
-
-                        # (Optional) Filter out rows where last_seen is None
-                        # tiers_df = toers_df.dropna(subset=['last_seen'])
-
-                    all_tiers_df = pd.concat([all_tiers_df, tiers_df])
-
-                    if DEBUG:
-                        debug_df(tiers_df, "tiers_df")
-                        #input("PRESS ANY KEY")
-
-                # Get and process nodes
-                st.write(f"Retrieving nodes for {app_name}...")
-                nodes_response = get_app_nodes(app_id)
-                nodes, nodes_status = validate_json(nodes_response)
-                if nodes_status == "valid":
-                    nodes_df = pd.DataFrame(nodes)
-                    nodes_df['app_id'] = app_id
-                    nodes_df = nodes_df.rename(columns={
-                        "id": "node_id",
-                        "name": "node_name"
-                    })
-
-                    if CALC_AVAILABILITY:
-                        # Function to apply to each row
-                        
-                        def get_last_seen(row):
-                            availability_response = get_metric("node", app_name, row['tierName'], row['agentType'], row['node_name'])
-                            availability_data, availability_data_status = validate_json(availability_response)
-
-                            if availability_data_status == "valid":
-                                last_seen, _ = handle_metric_response(availability_data, availability_data_status)
-                                return last_seen
-                            else:
-                                return None  # or a default value if desired
-
-                        # Apply the function and create the new column
-                        nodes_df['last_seen'] = nodes_df.apply(get_last_seen, axis=1)
-
-                        # (Optional) Filter out rows where last_seen is None
-                        # nodes_df = nodes_df.dropna(subset=['last_seen'])
-
-                    all_nodes_df = pd.concat([all_nodes_df, nodes_df])
-
-                    if DEBUG:
-                        debug_df(nodes_df, "nodes_df")
-                        #input("PRESS ANY KEY")
-
-                # Get and process backends
-                st.write(f"Retrieving backends for {app_name}...")
-                backends_response = get_app_backends(app_id)
-                backends, backends_status = validate_json(backends_response)
-                if backends_status == "valid":
-                    backends_df = pd.DataFrame(backends)
-                    backends_df['app_id'] = app_id
-                    backends_df = backends_df.rename(columns={
-                        "id": "backend_id",
-                        "name": "backend_name"
-                    })
-
-                    all_backends_df = pd.concat([all_backends_df, backends_df])
-
-                    if DEBUG:
-                        debug_df(backends_df, "backends_df")
-                        #input("PRESS ANY KEY")
-
-                # Get and process snapshots
-                if PULL_SNAPSHOTS:
-                    st.write(f"Retrieving snapshots for {app_name}...")
-                    snapshots_response = get_snapshots(app_id)
-                    snapshots, snapshots_status = validate_json(snapshots_response)
-                    if snapshots_status == "valid":
-                        snapshots_df = pd.DataFrame(snapshots)
-                        snapshots_df['app_id'] = app_id
+                    elif bts_status == "empty":
+                        st.write(f"No business transactions found for {app_name}.")
+                    
+                    # Get and process tiers
+                    st.write(f"Retrieving tiers for {app_name}...")
+                    tiers_response = get_tiers(app_id)
+                    tiers, tiers_status = validate_json(tiers_response)
+                    if tiers_status == "valid":
+                        tiers_df = pd.DataFrame(tiers)
+                        tiers_df['app_id'] = app_id
+                        tiers_df['app_name'] = app_name
+                        tiers_df = tiers_df.rename(columns={
+                            "id": "tier_id",
+                            "name": "tier_name"
+                        })
                         
                         if DEBUG:
-                            #input("main code - snapshots status is valid")
-                            print()
-                            debug_df(snapshots_df, "snapshots_df")
-                        
-                        def contruct_snapshot_link(row):
-                            #make the id fields strings so they can be concatenated into a URL
-                            request_guid = str(row['requestGUID'])
-                            app_id = str(row['app_id'])
-                            bt_id = str(row['businessTransactionId'])
-                            
-                            serverStartTime = row['serverStartTime']
-                            a = serverStartTime-1800000
-                            b = serverStartTime+1800000
-                            sst_begin = str(a)
-                            sst_end = str(b)
+                            debug_df(tiers_df, "tiers_df")
+                            #input("PRESS ANY KEY")
 
-                            snapshot_link = BASE_URL + "/controller/#/location=APP_SNAPSHOT_VIEWER&requestGUID=" + request_guid + "&application=" + app_id + "&businessTransaction=" + bt_id + "&rsdTime=Custom_Time_Range.BETWEEN_TIMES." + sst_end + "." + sst_begin + ".60" + "&tab=overview&dashboardMode=force"
+                        st.write(f"Found {tiers_df.shape[0]} tiers.")
+                        if SNES:
+                            play_sound("sounds/smb_coin.wav", False)
+
+                        if CALC_AVAILABILITY:
+                            print(f"Calculating availability for {tiers_df.shape[0]} tiers.")
+                            st.write(f"Calculating availability for {tiers_df.shape[0]} tiers.")
+                            
+                            # Function to apply to each row
+                            def get_last_seen(row):
+                                response = get_apm_availability("tier", app_name, row['tier_name'], row['agentType'], "")
+                                epoch, value = return_apm_availability(response)
+                                return epoch, value
+                                
+                            result_series = tiers_df.apply(get_last_seen, axis=1)  # Get Series of tuples
+
+                            # Extract values from the Series of tuples
+                            tiers_df['Last Seen Tier'] = result_series.str[0]
+                            tiers_df['Last Seen Tier - Node Count'] = result_series.str[1]
+
+                            # (Optional) Filter out rows where 'Last Seen' is None
+                            # tiers_df = toers_df.dropna(subset=['Last Seen Tier'])
+
+                        all_tiers_df = pd.concat([all_tiers_df, tiers_df])
+
+                    # Get and process nodes
+                    st.write(f"Retrieving nodes for {app_name}...")
+                    nodes_response = get_app_nodes(app_id)
+                    nodes, nodes_status = validate_json(nodes_response)
+                    if nodes_status == "valid":
+                        nodes_df = pd.DataFrame(nodes)
+                        nodes_df['app_id'] = app_id
+                        nodes_df['app_name'] = app_name
+                        nodes_df = nodes_df.rename(columns={
+                            "id": "node_id",
+                            "name": "node_name"
+                        })
+
+                        #cleanup the machine name removing -java-MA
+                        nodes_df['machineName-cleaned'] = nodes_df['machineName'].astype(str).str.replace('-java-MA$', '', regex=True)
+
+                        if DEBUG:
+                            debug_df(nodes_df, "nodes_df")
+                            #input("PRESS ANY KEY")
+                        
+                        st.write(f"Found {nodes_df.shape[0]} nodes for {app_name}.")
+                        
+                        if SNES:
+                            play_sound("sounds/smb_coin.wav", False)
+                
+                        if CALC_AVAILABILITY:
+                            print(f"Calculating availability for {nodes_df.shape[0]} nodes.")
+                            st.write(f"Calculating availability for {nodes_df.shape[0]} nodes.")
+
+                            # Function to apply to each row
+                            def get_last_seen(row):
+                                response = get_apm_availability("node", app_name, row['tierName'], row['agentType'], row['node_name'])
+                                epoch, value = return_apm_availability(response)
+                                print(f"epoch: {epoch} value: {value}")
+                                return epoch
+                                
+                            # Apply the function and create the new column
+                            nodes_df['Last Seen Node'] = nodes_df.apply(get_last_seen, axis=1)
+
+                            # (Optional) Filter out rows where last_seen is None
+                            # nodes_df = nodes_df.dropna(subset=['last_seen'])
+
+                        all_nodes_df = pd.concat([all_nodes_df, nodes_df])
+
+                        if SNES:
+                            play_sound("sounds/smb_powerup.wav", False)
+                    
+                    else:
+                        st.write(f"No nodes found for: {app_name} status: {nodes_status}")
+
+                    # Get and process backends
+                    st.write(f"Retrieving backends for {app_name}...")
+                    backends_response = get_app_backends(app_id)
+                    backends, backends_status = validate_json(backends_response)
+                    if backends_status == "valid":
+                        backends_df = pd.DataFrame(backends)
+                        backends_df['app_id'] = app_id
+                        backends_df['app_name'] = app_name
+                        backends_df = backends_df.rename(columns={
+                            "id": "backend_id",
+                            "name": "backend_name"
+                        })
+                        
+                        if DEBUG:
+                            debug_df(backends_df, "backends_df")
+                            #input("PRESS ANY KEY")
+                    
+                        st.write(f"Found {backends_df.shape[0]} backends for {app_name}.")
+                        
+                        all_backends_df = pd.concat([all_backends_df, backends_df])
+
+                        if SNES:
+                            play_sound("sounds/smb_coin.wav", False)
+
+                    else:
+                        st.write(f"No backends found for: {app_name} status: {backends_status}")
+
+                    # Get and process health rules
+                    st.write(f"Retrieving health rules for {app_name}...")
+                    healthRules_response = get_healthRules(app_id)
+                    healthRules, healthRules_status = validate_json(healthRules_response)
+                    if healthRules_status == "valid":
+                        healthRules_df = pd.DataFrame(healthRules)
+                        healthRules_df['app_id'] = app_id
+                        healthRules_df['app_name'] = app_name
+                        
+                        if DEBUG:
+                            debug_df(healthRules_df, "healthRules_df")
+
+                        st.write(f"Found {healthRules_df.shape[0]} health rules for {app_name}.")
+
+                        all_healthRules_df = pd.concat([all_healthRules_df, healthRules_df])
+
+                        if SNES:
+                            play_sound("sounds/smb_coin.wav", False)
+
+                    else:
+                        st.write(f"No health rules found for: {app_name} status: {healthRules_status}")
+
+                    # Get and process snapshots
+                    if PULL_SNAPSHOTS:
+                        st.write(f"Retrieving snapshots for {app_name}...")
+                        snapshots_response = get_snapshots(app_id)
+                        snapshots, snapshots_status = validate_json(snapshots_response)
+                        if snapshots_status == "valid":
+                            snapshots_df = pd.DataFrame(snapshots)
+                            snapshots_df['app_id'] = app_id
                             
                             if DEBUG:
-                                print(f"--- Constructed snapshot link: {snapshot_link}")
+                                debug_df(snapshots_df, "snapshots_df")
 
-                            return snapshot_link
+                            st.write(f"Found {snapshots_df.shape[0]} for {app_name}.")
+                            
+                            def contruct_snapshot_link(row):
+                                #make the id fields strings so they can be concatenated into a URL
+                                request_guid = str(row['requestGUID'])
+                                app_id = str(row['app_id'])
+                                bt_id = str(row['businessTransactionId'])
+                                
+                                serverStartTime = row['serverStartTime']
+                                a = serverStartTime-1800000
+                                b = serverStartTime+1800000
+                                sst_begin = str(a)
+                                sst_end = str(b)
 
-                        def convert_snapshot_time(row):
-                            epochtimestamp = row['serverStartTime']
-                            result = convert_epoch_timestamp(epochtimestamp)
-                            return result
+                                snapshot_link = BASE_URL + "/controller/#/location=APP_SNAPSHOT_VIEWER&requestGUID=" + request_guid + "&application=" + app_id + "&businessTransaction=" + bt_id + "&rsdTime=Custom_Time_Range.BETWEEN_TIMES." + sst_end + "." + sst_begin + ".60" + "&tab=overview&dashboardMode=force"
+                                
+                                return snapshot_link
 
-                        # create deep links for the snapshots
-                        snapshots_df['snapshot_link'] = snapshots_df.apply(contruct_snapshot_link, axis=1)
+                            # create deep links for the snapshots
+                            st.write(f"Creating deep links for snapshots in {app_name}...")
+                            print(f"Creating deep links for snapshots in {app_name}...")
+                            if SNES:
+                                play_sound("sounds/smb_kick.wav", False)
 
-                        # convert the epoch timestamps to datetime
-                        snapshots_df['start_time'] = snapshots_df.apply(convert_snapshot_time, axis=1)
+                            snapshots_df['snapshot_link'] = snapshots_df.apply(contruct_snapshot_link, axis=1)
 
-                        all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
-                        #if DEBUG:
-                            #debug_df(all_snapshots_df, "all_snapshots_df")
-                            #input("main code - snapshots status is valid")
+                            all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
 
-                    elif snapshots_status == "empty":
-                        print ("            --- No snapshots returned")
-                        st.write(f"No snapshots found for {app_name}.")
+                            if SNES:
+                                play_sound("sounds/smb_1-up.wav", False)
 
-            # get ALL the servers - I would do this just per app but association doesn't always happen like we want it to
+                        elif snapshots_status == "empty":
+                            print ("            --- No snapshots returned")
+                            st.write(f"No snapshots found for {app_name}.")
+            else:
+                if application_id != "":
+                    st.write(f"No application data found for {application_id}")
+                else:
+                    st.write("No application data found.")
+
+        if retrieve_servers:
+            # get ALL the servers and containers
             st.write(f"Retrieving servers...")
             servers_response = get_servers()
             servers, servers_status = validate_json(servers_response)
-
+            
             if servers_status == "valid":
-                if DEBUG:
-                    print("        --- Writing all_servers_df...")
-                    st.write(f"Writing all_servers_df...")
                 all_servers_df = pd.DataFrame(servers)
 
                 if DEBUG:
                     debug_df(all_servers_df, "all_servers_df")
 
+                st.write(f"Found {all_servers_df.shape[0]} servers.")
+
+                if CALC_AVAILABILITY:
+                    st.write(f"Determining availability for each of {all_servers_df.shape[0]} servers. Please be patient...")              
+                    
+                    # Function to apply to each row
+                    def get_last_seen(row):
+                        response = get_SIM_availability(row['hierarchy'], row['hostId'], row['type'])
+                        epoch, value = return_apm_availability(response)
+                        return epoch
+                    
+                    # Apply the function and create the new column
+                    all_servers_df['Last Seen Server'] = all_servers_df.apply(get_last_seen, axis=1)
+
+                    # (Optional) Filter out rows where last_seen is None
+                    # all_server_df = nodes_df.dropna(subset=['Last Seen Server'])
+
             else:
+                st.write(f"No servers returned. Status: {servers_status}")
                 print(f"        --- No servers returned. Status: {servers_status} Response: {servers}")
 
-            #merge the things
-            # Join the DataFrames as needed
-            if not all_snapshots_df.empty:
-                st.write("Performing merge on snapshots data...")
-                all_snapshots_merged_df = pd.merge(
-                    all_snapshots_df, all_tiers_df, left_on="applicationComponentId", right_on="tier_id", how="left", suffixes=(None, "_tier")
-                ).merge(
-                    all_nodes_df, left_on="applicationComponentNodeId", right_on="node_id", how="left", suffixes=(None, "_node")
-                ).merge(
-                    all_bts_df, left_on="businessTransactionId", right_on="bt_id", how="left", suffixes=(None, "_bt")
-                ).merge(
-                    applications_df, left_on="applicationId", right_on="app_id", how="left", suffixes=(None, "_app")
-                )
+        #Convert epoch timestamps to datetime
+        if CALC_AVAILABILITY:
+            if PULL_SNAPSHOTS:
+                st.write("Converting snapshot epoch timestamps to datetimes...")
+                print("Converting snapshot epoch timestamps to datetimes...")
+                if SNES:
+                    play_sound("sounds/smb_kick.wav", False)
 
-                #delete the all_snapshots_df to free up RAM
-                del all_snapshots_df
-                gc.collect()
+                all_snapshots_df['start_time'] = pd.to_datetime(all_snapshots_df['serverStartTime'], unit='ms')
+                all_snapshots_df['local_start_time'] = pd.to_datetime(all_snapshots_df['localStartTime'], unit='ms') 
 
-                #drop the redundant columns
-                if DEBUG:
-                    print("Removing redundant columns from merge...")
-
-                st.write("Doing some cleanup...")
-                    
-                all_snapshots_merged_df.drop(columns=['accountGuid','app_id_tier','app_id_node','app_id_app', 'agentType', 'applicationId', 'appAgentPresent', 'bt_id', 'description', 'entryPointTypeString', 'id', 'last_seen', 'last_seen_count', 'localID', 'numberOfNodes', 'tierId', 'tierId_bt', 'tierName', 'tierName_bt', 'tierId_bt', 'tierName_bt', 'type'], inplace=True)
+                # If you need to format them to a specific string representation
+                all_snapshots_df['start_time'] = all_snapshots_df['start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
+                all_snapshots_df['local_start_time'] = all_snapshots_df['local_start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
             
+            if not all_nodes_df.empty:
+                st.write("Converting tier epoch timestamps to datetimes...")
+                print("Converting tier epoch timestamps to datetimes...")
+                if SNES:
+                    play_sound("sounds/smb_kick.wav", False)
+
+                if DEBUG:
+                    debug_df(all_tiers_df, "all_tiers_df - post availability checks")
+
+                all_tiers_df['Last Seen Tier'] = pd.to_datetime(all_tiers_df['Last Seen Tier'], unit='ms')
+                
+                st.write("Converting node epoch timestamps to datetimes...")
+                print("Converting node epoch timestamps to datetimes...")
+                if SNES:
+                    play_sound("sounds/smb_kick.wav", False)
+
+                if DEBUG:
+                    debug_df(all_nodes_df, "all_nodes_df - post avaialability checks")
+
+                all_nodes_df['Last Seen Node'] = pd.to_datetime(all_nodes_df['Last Seen Node'], unit='ms') 
+
+                # format them to a specific string representation
+                all_tiers_df['Last Seen Tier'] = all_tiers_df['Last Seen Tier'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
+                all_nodes_df['Last Seen Node'] = all_nodes_df['Last Seen Node'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
+
+            if not all_servers_df.empty:
+                st.write("Converting server epoch timestamps to datetimes...")
+                print("Converting server epoch timestamps to datetimes...")
+                if SNES:
+                    play_sound("sounds/smb_kick.wav", False)
+
+                if DEBUG:
+                    debug_df(all_servers_df, "all_servers_df - post availability checks")
+
+                all_servers_df['Last Seen Server'] = pd.to_datetime(all_servers_df['Last Seen Server'], unit='ms')
+                all_servers_df['Last Seen Server'] = all_servers_df['Last Seen Server'].dt.strftime('%m/%d/%Y %I:%M:%S %p')    
+
+        #merge things
+        st.write("Performing merge on data to make it human-friendly...")
+        # Merge the snapshots data with app, bt, tier and node data
+        if not all_snapshots_df.empty and not applications_df.empty and not all_tiers_df.empty and not all_nodes_df.empty and not all_bts_df.empty:
+            if DEBUG:
+                st.write("Performing merge on snapshots data...")
+                print("Performing merge on snapshots data...")
+
+            all_snapshots_merged_df = pd.merge(
+                all_snapshots_df, all_tiers_df, left_on="applicationComponentId", right_on="tier_id", how="left", suffixes=(None, "_tier")
+            ).merge(
+                all_nodes_df, left_on="applicationComponentNodeId", right_on="node_id", how="left", suffixes=(None, "_node")
+            ).merge(
+                all_bts_df, left_on="businessTransactionId", right_on="bt_id", how="left", suffixes=(None, "_bt")
+            ).merge(
+                applications_df, left_on="applicationId", right_on="app_id", how="left", suffixes=(None, "_app")
+            )  
+
+            #delete the all_snapshots_df to free up RAM
+            if DEBUG:
+                st.write("purging all_snapshots_df and performing GC to free RAM...")
+                print("purging all_snapshots_df and performing GC to free RAM...")
+            del all_snapshots_df
+            gc.collect()
+
+            #drop the redundant columns
+            if DEBUG:
+                print("Removing redundant columns from merge...")
+                st.write("Doing some cleanup...")
+              
+            all_snapshots_merged_df.drop(columns=[
+                'accountGuid',
+                'app_id_tier',
+                'app_id_node',
+                'app_id_app',
+                'app_name_app',
+                'app_name_node',
+                'agentType_node',
+                'applicationId',
+                'appAgentPresent',
+                'bt_id',
+                'description',
+                'description_app',
+                'entryPointTypeString',
+                'id',
+                'ipAddresses',
+                'localID',
+                'nodeUniqueLocalId',
+                'numberOfNodes',
+                'serverStartTime',
+                'tierId_bt',
+                'tierName_bt']
+            , inplace=True, errors='ignore')
+            
+        else:
+            if DEBUG:
+                st.write("all_snapshots_df is empty, skipping merge...")
+                print("all_snapshots_df is empty, skipping merge...")
+
+        #merge node and server data 
+        if retrieve_apm and retrieve_servers and not all_nodes_df.empty and not all_servers_df.empty:
+            if DEBUG:
+                st.write("Performing merge on servers data...")
+                print("        --- Merging node and machine data.")
+            
+            st.write("Merging node and machine data...")
+            
+            all_nodes_merged_df = pd.merge (
+                all_nodes_df, all_servers_df, left_on="machineName-cleaned", right_on="name", how="left", suffixes=(None, "_servers")
+            )
+            
+            #delete the all_nodes_df to free up RAM
+            if DEBUG:
+                st.write("purging all_nodes_df and performing GC to free RAM...")
+                print("purging all_nodes_df and performing GC to free RAM...")
+            del all_nodes_df
+            gc.collect()
+
+            if NORMALIZE:
+                def parse_properties(data, prefix):
+                    """
+                    Parses the data (dictionary or list) into individual columns, prefixing the column names.
+                    Handles the 'Disk' key specially, keeping its sub-properties in a single 'Disk' column.
+
+                    Args:
+                        data (dict or list or None): The data to be parsed.
+                        prefix (str): The prefix to add to the column names.
+
+                    Returns:
+                        pd.Series: A Series containing the parsed data, with NaN values for missing keys and prefixed column names.
+                    """
+
+                    if isinstance(data, dict):
+                        result = pd.Series(dtype='object')
+
+                        # Group all the disks together
+                        disk_data = {k: v for k, v in data.items() if k.startswith('Disk|')}
+                        if disk_data:
+                            #result[prefix + "|Disk"] = [disk_data]
+                            result["Disk"] = str(disk_data)
+
+                        # Parse the remaining data (excluding 'Disk' sub-properties)
+                        remaining_data = {k: v for k, v in data.items() if not k.startswith('Disk|')}
+                        #result = pd.concat([result, pd.Series(remaining_data).add_prefix(prefix + "|")])
+                        result = pd.concat([result, pd.Series(remaining_data)])
+                        return result
+
+                    elif isinstance(data, list) and len(data) == 0:  # Empty list
+                        return pd.Series(dtype='object')  # Empty Series
+                    else:  # None or other unexpected values
+                        return pd.Series(dtype='object')  # Empty Series
+
+                try:
+                    columns_to_parse = ['properties', 'memory', 'cpus']  # Add more column names if needed
+
+                    for col in columns_to_parse:
+                        # Parse the column into individual columns with prefix
+                        if DEBUG:
+                            st.write(f"Attempting to parse {col}")
+                            print(f"Attempting to parse {col}")
+                        
+                        parsed_df = all_nodes_merged_df[col].apply(parse_properties, args=(col,))
+
+                        # Join the parsed DataFrame back to the original DataFrame
+                        if DEBUG:
+                            st.write(f"Attempting join of {col} data to all_nodes_merged_df...")
+                            print(f"Attempting join of {col} data to all_nodes_merged_df...")
+
+                        all_nodes_merged_df = all_nodes_merged_df.join(parsed_df)
+
+                        # Drop the original column
+                        if DEBUG:
+                            st.write(f"Dropping the source column {col}.")
+                            print(f"Dropping the source column {col}.")
+                        
+                        all_nodes_merged_df.drop(columns=[col], inplace=True)
+                    
+                    #extract the goodies and leave the rest
+                    all_nodes_merged_df['Physical'] = all_nodes_merged_df['Physical'].apply(lambda x: x['sizeMb'] if isinstance(x, dict) and 'sizeMb' in x else x)
+                    all_nodes_merged_df['Swap'] = all_nodes_merged_df['Swap'].apply(lambda x: x['sizeMb'] if isinstance(x, dict) and 'sizeMb' in x else x)
+                    
+
+                except Exception as e:
+                    st.write(f"An error occurred while parsing columns: {e}")
+                    print(f"An error occurred while parsing columns: {e}")
+
             else:
                 if DEBUG:
-                    print("all_snapshots_df is empty, skipping merge...")
-                
-                st.write("all_snapshots_df is empty, skipping merge...")
-
-            #merge node and server data 
-            if not (all_nodes_df.empty & all_servers_df.empty):
-                if DEBUG:
-                    print("        --- Merging node and machine data.")
-                
-                st.write("Merging node and machine data...")
-                
-                all_nodes_merged_df = pd.merge (
-                    all_nodes_df, all_servers_df, left_on="machineName", right_on="name", how="left", suffixes=(None, "_servers")
-                )
-                
-                #delete the all_nodes_df to free up RAM
-                del all_nodes_df
-                gc.collect()
-
-                if DEBUG:
+                    st.write("All nodes merged with corresponding server data.")
+                    print("All nodes merged with corresponding server data.")
                     debug_df(all_nodes_merged_df, "all_nodes_merged_df")
 
-                normalized_dataframes = {}
-
-                for column_name in ['properties', 'memory']:  # Replace with your column names
-                    normalized_dataframes[column_name] = pd.json_normalize(all_nodes_merged_df[column_name], sep='_')
-
-                # Merge the normalized DataFrames back into the original one
-                for df_name, df in normalized_dataframes.items():
-                    all_nodes_merged_df = all_nodes_merged_df.join(df)
-
-                # Drop the source columns now since we normalized them
-                all_nodes_merged_df = all_nodes_merged_df.drop(columns=['properties', 'memory'])
-
-                #drop unnecessary columns - maybe add options for this later
-                all_nodes_merged_df.drop(columns=['agentConfig', 'AppDynamics|Agent|JVM Info', 'AppDynamics|Agent|Agent Pid', 'AppDynamics|Agent|Agent version', 'AppDynamics|Agent|Build Number', 'AppDynamics|Agent|Install Directory', 'AppDynamics|Agent|Machine Info', 'controllerConfig', 'cpus', 'ipAddresses', 'networkInterfaces', 'Physical_type', 'Swap_type', 'volumes'], inplace=True)
-
-                #do some renaming
-                all_nodes_merged_df.rename(columns={
-                    'Physical_sizeMb': 'RAM_MB',
-                    'AppDynamics|Agent|Smart Agent Id': 'smart_agent_ID',
-                    'Processor|Logical Core Count': 'cores_logical',
-                    'Processor|Physical Core Count': 'cores_physical',
-                    'vCPU': 'cores_vCPU'
-                }, inplace=True) 
-
-            #--- start the output of all this data
-
-            #change the output file name to include app name if this is against a single app
-            if len(applications_df) == 1:
-                OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"-"+(applications_df["app_name"].iloc[0]).replace(" ", "_")+"-analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
-
-            st.write(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
+            #drop unnecessary columns
             if DEBUG:
-                print(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
-            
-            # --- Write to Excel with formatting ---
+                st.write("Dropping unneeded columns from all_nodes_merged_df...")
+            all_nodes_merged_df.drop(columns=[
+                'agentConfig',
+                'AppDynamics|Agent|JVM Info',
+                'AppDynamics|Agent|Agent Pid',
+                'AppDynamics|Agent|Machine Info',
+                'controllerConfig',
+                'ipAddresses',
+                'machineAgentVersion',
+                'nodeUniqueLocalId'
+            ], inplace=True, errors='ignore')
+
+            #do some renaming
+            if DEBUG:
+                st.write("Renaming columns to be more readable in all_nodes_merged_df...")
+            all_nodes_merged_df.rename(columns={
+                'agentType':'Node - Agent Type',
+                'appAgentVersion':'App Agent Version',
+                'app_name':'Application Name',
+                'AppDynamics|Agent|Agent version':'Machine Agent Version',
+                'AppDynamics|Agent|Build Number':'Machine Agent Build #',
+                'AppDynamics|Agent|Install Directory':'Machine Agent Path',
+                'AppDynamics|Machine Type':'Machine Agent Type',
+                'Bios|Version':'BIOS Version',
+                'node_name':'Node Name',
+                'OS|Architecture':'OS Arch',
+                'OS|Kernel|Release':'OS Version',
+                'OS|Kernel|Name':'OS Name',
+                'Physical':'RAM MB',
+                'Swap':'SWAP MB',
+                'Processor|Logical Core Count':'CPU Logical Cores',
+                'Processor|Physical Core Count':'CPU Physical Cores',
+                'tierName':'Tier Name',
+                'Total|CPU|Logical Processor Count':'CPU Total Logical Cores',
+                'type_servers':'Server Type',
+                'type':'Tier Type',
+                'volumes':'Volumes',
+                'vCPU': 'CPU vCPU'
+            }, inplace=True, errors='ignore') 
+ 
+        #generate licensing df
+        if retrieve_apm and retrieve_servers and not all_nodes_merged_df.empty:
+            st.write("Generating license usage information...")
+            # Apply the function and display the result
+            license_usage_df = calculate_licenses(all_nodes_merged_df)
+            debug_df(license_usage_df, "license_usage_df")
+        else:
+            st.write("Skipping license usage reporting - please run with retrieve servers option checked.")
+    
+        #--- start the output of all this data
+
+        #change the output file name to include app name if this is being run against a single app
+        if len(applications_df) == 1:
+            OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"-"+(applications_df["app_name"].iloc[0]).replace(" ", "_")+"-analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
+
+        st.write(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
+        if DEBUG:
+            print(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
+        
+        # --- Write to Excel with formatting ---
+        try:
             with pd.ExcelWriter(OUTPUT_EXCEL_FILE, engine='xlsxwriter') as writer:
                 workbook = writer.book
                 # Define formats
@@ -1036,35 +1443,63 @@ if submitted:
                     'border': 1
                     })  # White
 
-                df_to_sheet_map = {}
-
+                #df to sheet mapping
                 for df_name, df in [
                     ("Info", information_df),
+                    ("License Usage", license_usage_df),
                     ("Applications", applications_df),
                     ("BTs", all_bts_df),
                     ("Tiers", all_tiers_df),
                     ("Nodes", all_nodes_merged_df),
                     ("Backends", all_backends_df),
+                    ("Health Rules", all_healthRules_df),
                     ("Snapshots", all_snapshots_merged_df),
                     ("Servers", all_servers_df)
                 ]:
+                    #handle case where user didn't pull servers and thus the merge never happened
+                    if all_nodes_merged_df.empty and df_name == "Nodes":
+                        df = all_nodes_df
+
                     if not df.empty:
-                        if DEBUG:
-                            print(f"Reordering {df_name} columns...")
+                        if not df_name == "License Usage":
+                            if DEBUG:
+                                print(f"Ordering {df_name}...")
+                                st.write(f"Ordering {df_name}...")
+
+                            #convert all column names to strings
+                            if DEBUG:
+                                st.write(f"Converting column names in {df_name} to strings...")
+                                print(f"Converting column names in {df_name} to strings...")
+                            
+                            df.columns = df.columns.astype(str)
+
+                            # Get a list of column names in alphabetical order
+                            if DEBUG:
+                                st.write("Getting list of sorted column names...")
+                                print("Getting list of sorted column names...")
+                            
+                            column_order = sorted(df.columns)
+
+                            # Reorder the DataFrame's columns
+                            if DEBUG:
+                                st.write("Reordering the columns...")
+                                print("Reordering the columns...")
+                            
+                            df = df[column_order]
+
+                            # Replace NaNs with empty strings before writing to Excel
+                            df.fillna('', inplace=True)
                         
-                        #put dataframes in alphabetical order
-                        st.write(f"Ordering {df_name}...")
+                        else:
+                            #ensure column headers are stings
+                            df.columns = df.columns.astype(str)
+                            # Replace NaNs with empty strings before writing to Excel
+                            df.fillna('', inplace=True)
 
-                        #convert all column names to strings
-                        df.columns = df.columns.astype(str)
+                        if DEBUG:
+                            print(f"Writing {df_name} DataFrame...")
+                            st.write(f"Writing {df_name} DataFrame...")
 
-                        # Get a list of column names in alphabetical order
-                        column_order = sorted(df.columns)
-
-                        # Reorder the DataFrame's columns
-                        df = df[column_order]
-
-                        print(f"Writing {df} DataFrame...")
                         df.to_excel(writer, sheet_name=df_name, index=False)
                         
                         # Get the worksheet and apply formatting
@@ -1076,23 +1511,77 @@ if submitted:
                                 column_length = max(df[value].astype(str).map(len).max(), len(value))
                             except:
                                 column_length = 10
-                            worksheet.set_column(col_num, col_num, column_length + 3)
-                            worksheet.write(0, col_num, value, header_format)  # Format header
                             
-                        # Apply alternating row colors (starting from the second row)
-                        for row_num in range(1, df.shape[0] + 1):
-                            if row_num % 2 == 1:
-                                worksheet.set_row(row_num, cell_format=odd_row_format)
-                            else:
-                                worksheet.set_row(row_num, cell_format=even_row_format)
+                            #set a max column length
+                            if column_length > 50:
+                                column_length = 50
+
+                            worksheet.set_column(col_num, col_num, column_length + 2)
+                            worksheet.write(0, col_num, value, header_format)  # Format header
+                                    
+                        # Apply alternating row colors (starting from the second row) except for the Snapshots sheet
+                        if not df_name == "Snapshots":
+                            for row_num in range(1, df.shape[0] + 1):
+                                if row_num % 2 == 1:
+                                    worksheet.set_row(row_num, cell_format=odd_row_format)
+                                else:
+                                    worksheet.set_row(row_num, cell_format=even_row_format)
+                            
+                        # Coloring snapshot rows based on userExperience
+                        if df_name == "Snapshots":
+                            for row_num in range(1, df.shape[0] + 1):
+                                user_experience = df.loc[row_num - 1, 'userExperience']
+
+                                if user_experience == 'NORMAL':
+                                    fill_color = '#90EE90' 
+                                elif user_experience == 'ERROR':
+                                    fill_color = '#FA3B37' 
+                                elif user_experience == 'SLOW':
+                                    fill_color = '#FFFF80' 
+                                elif user_experience == 'VERY_SLOW':
+                                    fill_color = '#FC9C2D' 
+                                elif user_experience == 'STALL':
+                                    fill_color = '#FF69CD'
+                                else:
+                                    continue 
+
+                                cell_format = workbook.add_format({'bg_color': fill_color, 'border': 1})
+                                for col_num in range(df.shape[1]):
+                                    cell_value = df.loc[row_num - 1, df.columns[col_num]]
+                                    
+                                    # Handle any list values
+                                    if isinstance(cell_value, list):
+                                        if len(cell_value) > 0:
+                                            cell_value = str(cell_value[0])  # Or any other appropriate conversion
+                                        else:
+                                            cell_value = ""  # Or any other default value you prefer for empty lists
+                                    
+
+                                    worksheet.write(row_num, col_num, cell_value, cell_format)
+                        
+                    else:
+                        st.write(f"{df_name} empty, skipping write.")
+
+                writer.close()
+
                 st.write("*Finished.* :sunglasses:")
                 if DEBUG:
                     print("Finished.")
 
-        else:
-            if application_id != "":
-                st.write(f"No application data found for {application_id}")
-            else:
-                st.write("No application data found.")
+                # Open the Excel file
+                if sys.platform == "win32":
+                    os.startfile(OUTPUT_EXCEL_FILE) 
+                elif sys.platform == "darwin":  # macOS
+                    subprocess.call(["open", OUTPUT_EXCEL_FILE])
+                else:  # Linux or other Unix-like systems
+                    subprocess.call(["xdg-open", OUTPUT_EXCEL_FILE])
 
-    status.update(label="Extraction complete!", state="complete", expanded=False)
+        except PermissionError:
+            st.warning(f"Unable to write to {OUTPUT_EXCEL_FILE}. Please check permissions.")
+            keep_status_open = True
+
+        '''except Exception as e:
+            st.error(f"An error occurred while writing the file: {e}")
+            keep_status_open = True'''
+
+    status.update(label="Extraction complete!", state="complete", expanded=keep_status_open)

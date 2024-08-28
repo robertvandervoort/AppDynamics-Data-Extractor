@@ -16,6 +16,7 @@ import gc
 
 #--- CONFIGURATION SECTION ---
 SNES = False
+DEBUG = True
 
 # Verify SSL certificates - should only be set false for on-prem controllers. Use this if the script fails right off the bat and gives you errors to the point..
 VERIFY_SSL = True
@@ -54,7 +55,7 @@ def is_token_valid():
     if DEBUG:
         print("    --- Checking token validity...")
 
-    if __session__ is None:
+    if __session__ is None or not __session__:
         if DEBUG:
             print("    --- __session__ not found or empty.")
         return False
@@ -237,6 +238,14 @@ def return_apm_availability(metric_response):
             return None, None
 
     if status == "valid":
+        # Check if any dictionary in the list has 'metricName' equal to 'METRIC DATA NOT FOUND'
+        condition = any(d['metricName'] == 'METRIC DATA NOT FOUND' for d in data)
+
+        # Use the condition in a conditional block
+        if condition:
+            print("Metric data not found!")
+            return None, None
+        
         try:
             epoch, value = determine_availability(data, status)
             return epoch, value
@@ -244,7 +253,7 @@ def return_apm_availability(metric_response):
         except Exception as e:
             st.write(f"Unexpected error during validation: of APM availability data: {e}")
             print(f"Unexpected error during validation: of APM availability data: {e}")
-            print(f"data: {data}")
+            print(f"status: {status} data: {data}")
             input("press a key...")
             return None, None      
 
@@ -362,15 +371,21 @@ def get_applications():
         verify = VERIFY_SSL
     )
 
-    #if DEBUG:
-    #    print(applications_response.text)
-
     return applications_response
 
 def refresh_applications():
-    st.write("Retrieving applications...")
-    applications_response = get_applications()
-    applications, applications_status = validate_json(applications_response)
+    global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, BASE_URL, application_id
+    APPDYNAMICS_ACCOUNT_NAME = account_name
+    APPDYNAMICS_API_CLIENT = api_client
+    APPDYNAMICS_API_CLIENT_SECRET = api_key
+    BASE_URL = "https://"+APPDYNAMICS_ACCOUNT_NAME+".saas.appdynamics.com"
+    application_id = None
+
+    authenticate("initial")
+    
+    with st.spinner('Retrieving applications...'):  
+        applications_response = get_applications()
+        applications, applications_status = validate_json(applications_response)
 
     if applications_status == "valid":
         applications_df = pd.DataFrame(applications)
@@ -383,6 +398,8 @@ def refresh_applications():
 
         if DEBUG:
             debug_df(applications_df, "applications_df")
+    
+    st.rerun()
 
 @handle_rest_errors
 def get_tiers(application_id):
@@ -729,6 +746,35 @@ if secrets:
             api_key = secret.get("api-key", "")
             break
 
+connect_button = st.button("Connect")
+
+if 'applications_df' in st.session_state:
+    applications_df = st.session_state['applications_df']
+
+    # Create a list of tuples (app_id, app_name)
+    app_names = [(row['app_id'], row['app_name']) for _, row in applications_df.iterrows()]
+
+    # Insert "ALL APPS" at the beginning
+    app_names.insert(0, ("ALL", "ALL APPS"))
+
+    # Extract only the app_name for display in the multi-select
+    display_names = [name for _, name in app_names]
+
+    # Create the multi-select list
+    selected_apps = st.multiselect("Select applications:", display_names)
+
+    # Get the selected app_ids (including "ALL APPS" if selected)
+    selected_app_ids = [app_id for app_id, name in app_names if name in selected_apps]
+
+    if selected_app_ids:
+        application_id = ""
+        #st.write("You selected app_ids:", selected_app_ids)
+
+"***Note: license usage analysis requires APM and server data***"
+retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes)?", value=True)    
+retrieve_servers = st.checkbox("Retrieve all machine agent data?", value=True)
+pull_snapshots = st.checkbox("Get Snapshots?", value=False)
+
 # --- User config form ---
 with st.form("config_form"):
     if not secrets:
@@ -739,29 +785,48 @@ with st.form("config_form"):
     # Save button
     save_button = st.form_submit_button("Save Credentials")
     
-    application_id = st.text_input("Application ID (optional)", value="")
+    if 'applications_df' not in st.session_state:
+        application_id = st.text_input("Application ID (optional)", value="")
     
-    "APM"
-    retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes)?", value=True)    
-    calc_availability = st.checkbox("Analyze tier, node and server availability?", value=False)
-    metric_duration_mins = st.text_input("How far to look back for availability? (mins)", value="60")
-    #add this back at some point maybe
-    #metric_rollup = st.checkbox("Rollup metrics?", value=False)
-    "Snapshots"
-    pull_snapshots = st.checkbox("Get Snapshots?", value=False)
-    "Snapshot Options"
-    snapshot_duration_mins = st.text_input("How far to look back for snapshots? (mins)", value="60")
-    first_in_chain = st.checkbox("Capture only first in chain snapshots?", value=True)
-    need_exit_calls = st.checkbox("Return exit call data with snapshots?", value=False)
-    need_props = st.checkbox("Return data collector data with snapshots?", value=False)
-    "Servers"
-    retrieve_servers = st.checkbox("Retrieve all machine agent data?", value=True)
-    normalize = st.checkbox("Break out server properties into columns?", value=False)
+    if retrieve_apm:
+        "### APM options"
+        calc_availability = st.checkbox("Analyze tier, node and server availability?", value=True)
+        metric_duration_mins = st.text_input("How far to look back for availability? (mins)", value="60")
+        #add this back at some point maybe
+        #metric_rollup = st.checkbox("Rollup metrics?", value=False)
+    
+    if pull_snapshots:
+        "### Snapshot options"
+        snapshot_duration_mins = st.text_input("How far to look back for snapshots? (mins)", value="60")
+        first_in_chain = st.checkbox("Capture only first in chain snapshots?", value=True)
+        need_exit_calls = st.checkbox("Return exit call data with snapshots?", value=False)
+        need_props = st.checkbox("Return data collector data with snapshots?", value=False)
+    
+    #if retrieve_servers:
+        #"### Servers"
+        #normalize = st.checkbox("Break out server properties into columns?", value=False)
+        #normalize = True
+    
     debug_output = st.checkbox("Debug output?", value=False)
 
     # Submit button
     submitted = st.form_submit_button("Extract Data")
 
+if connect_button:
+    global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
+        APPLICATION_ID, METRIC_DURATION_MINS, PULL_SNAPSHOTS, FIRST_IN_CHAIN, \
+        CALC_AVAILABILITY
+    
+    # Update global variables with user input
+    APPDYNAMICS_ACCOUNT_NAME = account_name
+    APPDYNAMICS_API_CLIENT = api_client
+    APPDYNAMICS_API_CLIENT_SECRET = api_key
+    APPLICATION_ID = ""
+
+    st.write("Connecting to retrieve applications list...")
+    print("Connecting to retrieve applications list...")
+    refresh_applications()
+    
 if save_button:
     # Update secrets.yml with user input
     new_secrets = []
@@ -790,13 +855,17 @@ if submitted and (retrieve_apm or retrieve_servers):
         play_sound("sounds/smb_jump-small.wav", False)
                 
     # Update global variables with user input
-    global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
-        APPLICATION_ID, DEBUG, METRIC_DURATION_MINS, PULL_SNAPSHOTS, FIRST_IN_CHAIN, CALC_AVAILABILITY
-    print(f"account_name={account_name}, api_client={api_client}, api_key={api_key}, a[[;ocatopm_id={application_id}]]")
     APPDYNAMICS_ACCOUNT_NAME = account_name
     APPDYNAMICS_API_CLIENT = api_client
     APPDYNAMICS_API_CLIENT_SECRET = api_key
-    APPLICATION_ID = application_id
+    if not selected_app_ids and application_id:    
+        APPLICATION_ID = application_id
+    if not selected_app_ids and application_id == "":
+        st.write("You must select an application or an application_id to continue.")
+        st.rerun()
+    if selected_app_ids:
+        APPLICATION_ID = ""
+
     METRIC_DURATION_MINS = metric_duration_mins
     CALC_AVAILABILITY = calc_availability
     PULL_SNAPSHOTS = pull_snapshots
@@ -876,7 +945,12 @@ if submitted and (retrieve_apm or retrieve_servers):
                     "name": "app_name"
                 })
                 
-                #st.session_state['applications_df'] = applications_df  # Store in session state
+                if selected_app_ids:
+                    # Filter the DataFrame based on selected_app_ids
+                    if "ALL" in selected_app_ids:
+                        applications_df = applications_df  # Keep all rows
+                    else:
+                        applications_df = applications_df[applications_df['app_id'].isin(selected_app_ids)]
 
                 if DEBUG:
                     debug_df(applications_df, "applications_df")
@@ -1120,11 +1194,8 @@ if submitted and (retrieve_apm or retrieve_servers):
                             print ("            --- No snapshots returned")
                             st.write(f"No snapshots found for {app_name}.")
             else:
-                if application_id != "":
-                    st.write(f"No application data found for {application_id}")
-                else:
-                    st.write("No application data found.")
-
+                st.write(f"No application data found. status: {applications_status} data:{applications}")
+                
         if retrieve_servers:
             # get ALL the servers and containers
             st.write(f"Retrieving servers...")
@@ -1580,8 +1651,8 @@ if submitted and (retrieve_apm or retrieve_servers):
             st.warning(f"Unable to write to {OUTPUT_EXCEL_FILE}. Please check permissions.")
             keep_status_open = True
 
-        '''except Exception as e:
+        except Exception as e:
             st.error(f"An error occurred while writing the file: {e}")
-            keep_status_open = True'''
+            keep_status_open = True
 
     status.update(label="Extraction complete!", state="complete", expanded=keep_status_open)

@@ -13,9 +13,10 @@ import time
 import sys
 import subprocess
 import gc
+import pygame
 
 #--- CONFIGURATION SECTION ---
-SNES = False
+SNES = True
 DEBUG = True
 
 # Verify SSL certificates - should only be set false for on-prem controllers. Use this if the script fails right off the bat and gives you errors to the point..
@@ -699,24 +700,28 @@ def calculate_licenses(df):
 
 def debug_df(df, df_name, num_lines=10):
     """Displays DataFrame information in a more readable way."""
+    if SNES:
+        play_sound("sounds/smb_coin.wav")
+
     st.subheader(f"Debug Info: {df_name}")  # Use subheader instead of nested expander
     st.write(f"Shape (rows, cols): {df.shape}")
     #st.write(f"Columns: {df.columns.to_list()}")
     st.write(f"First {num_lines} rows:")
     st.write(df.head(num_lines).to_markdown(index=False, numalign='left', stralign='left'))
 
-def play_sound(file, wait):
+def play_sound(file_path):
     '''file = realtive path and filename to wave file, wait (Boolean) wait for the file to finish playing or not'''
     try:
-        wave_obj = sa.WaveObject.from_wave_file(file)
-        play_obj = wave_obj.play()
-        if wait:
-            play_obj.wait_done()
+        pygame.mixer.init()
+        sound = pygame.mixer.Sound(file_path)
+        sound.play()
+
     except Exception as e:
         print(f"Error playing sound: {e}")
 
 # --- MAIN (Streamlit UI) ---
-st.title("AppDynamics Data Extractor (not DEXTER)")
+st.title("AppDynamics Data Extractor")
+st.markdown('<h2 text-align: center>not DEXTER</h2>', unsafe_allow_html=True)
 
 # --- Load secrets and set initial values ---
 secrets = load_secrets()
@@ -724,6 +729,7 @@ selected_account = ""
 api_client_name = ""
 api_key = ""
 
+#load up accounts and creds if they exist
 if secrets:
     selected_account = secrets[0].get("account", "")
     api_client_name = secrets[0].get("api-client-name", "")
@@ -748,6 +754,7 @@ if secrets:
 
 connect_button = st.button("Connect")
 
+#conditional multiselect populator
 if 'applications_df' in st.session_state:
     applications_df = st.session_state['applications_df']
 
@@ -807,10 +814,12 @@ with st.form("config_form"):
         #normalize = st.checkbox("Break out server properties into columns?", value=False)
         #normalize = True
     
-    debug_output = st.checkbox("Debug output?", value=False)
-
     # Submit button
     submitted = st.form_submit_button("Extract Data")
+
+debug_output = st.checkbox("Debug output?", value=False)
+if debug_output:
+    SNES = st.checkbox("8-bit my debug!")
 
 if connect_button:
     global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
@@ -847,12 +856,7 @@ if save_button:
 # --- Main application code ---
 if submitted and (retrieve_apm or retrieve_servers):
     if SNES:
-        # Request microphone access before playing any sounds
-        sd.default.device = None, sd.query_devices()[0]['name']  # Set default output device
-        with sd.InputStream(channels=1, samplerate=44100, callback=None): 
-            pass  # This will trigger the microphone access request
-
-        play_sound("sounds/smb_jump-small.wav", False)
+        play_sound("sounds/smb_jump-small.wav")
                 
     # Update global variables with user input
     APPDYNAMICS_ACCOUNT_NAME = account_name
@@ -870,7 +874,8 @@ if submitted and (retrieve_apm or retrieve_servers):
     CALC_AVAILABILITY = calc_availability
     PULL_SNAPSHOTS = pull_snapshots
     SNAPSHOT_DURATION_MINS = snapshot_duration_mins
-    NORMALIZE = normalize
+    #NORMALIZE = normalize
+    NORMALIZE = True
     DEBUG = debug_output
     
     # add this back at some point maybe
@@ -958,7 +963,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                 st.write(f"Found {applications_df.shape[0]} applications.")
 
                 if SNES:
-                    play_sound("sounds/smb_coin.wav", False)
+                    play_sound("sounds/smb_coin.wav")
                 
                 #get current date and time and build info sheet - shoutout to Peter Wivagg for the suggestion
                 now = datetime.datetime.now()
@@ -983,7 +988,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                     
                     if bts_status == "valid":
                         if SNES:
-                            play_sound("sounds/smb_coin.wav", False)
+                            play_sound("sounds/smb_coin.wav")
                             
                         bts_df['app_id'] = app_id
                         bts_df = pd.DataFrame(bts_data)
@@ -999,7 +1004,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         st.write(f"Found {bts_df.shape[0]} business transactions.")
                         
                         if SNES:
-                            play_sound("sounds/smb_coin.wav", False)
+                            play_sound("sounds/smb_coin.wav")
 
                         all_bts_df = pd.concat([all_bts_df, bts_df])
 
@@ -1025,7 +1030,7 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                         st.write(f"Found {tiers_df.shape[0]} tiers.")
                         if SNES:
-                            play_sound("sounds/smb_coin.wav", False)
+                            play_sound("sounds/smb_coin.wav")
 
                         if CALC_AVAILABILITY:
                             print(f"Calculating availability for {tiers_df.shape[0]} tiers.")
@@ -1071,7 +1076,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         st.write(f"Found {nodes_df.shape[0]} nodes for {app_name}.")
                         
                         if SNES:
-                            play_sound("sounds/smb_coin.wav", False)
+                            play_sound("sounds/smb_coin.wav")
                 
                         if CALC_AVAILABILITY:
                             print(f"Calculating availability for {nodes_df.shape[0]} nodes.")
@@ -1093,7 +1098,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         all_nodes_df = pd.concat([all_nodes_df, nodes_df])
 
                         if SNES:
-                            play_sound("sounds/smb_powerup.wav", False)
+                            play_sound("sounds/smb_powerup.wav")
                     
                     else:
                         st.write(f"No nodes found for: {app_name} status: {nodes_status}")
@@ -1120,7 +1125,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         all_backends_df = pd.concat([all_backends_df, backends_df])
 
                         if SNES:
-                            play_sound("sounds/smb_coin.wav", False)
+                            play_sound("sounds/smb_coin.wav")
 
                     else:
                         st.write(f"No backends found for: {app_name} status: {backends_status}")
@@ -1142,7 +1147,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         all_healthRules_df = pd.concat([all_healthRules_df, healthRules_df])
 
                         if SNES:
-                            play_sound("sounds/smb_coin.wav", False)
+                            play_sound("sounds/smb_coin.wav")
 
                     else:
                         st.write(f"No health rules found for: {app_name} status: {healthRules_status}")
@@ -1181,14 +1186,14 @@ if submitted and (retrieve_apm or retrieve_servers):
                             st.write(f"Creating deep links for snapshots in {app_name}...")
                             print(f"Creating deep links for snapshots in {app_name}...")
                             if SNES:
-                                play_sound("sounds/smb_kick.wav", False)
+                                play_sound("sounds/smb_kick.wav")
 
                             snapshots_df['snapshot_link'] = snapshots_df.apply(contruct_snapshot_link, axis=1)
 
                             all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
 
                             if SNES:
-                                play_sound("sounds/smb_1-up.wav", False)
+                                play_sound("sounds/smb_1-up.wav")
 
                         elif snapshots_status == "empty":
                             print ("            --- No snapshots returned")
@@ -1235,10 +1240,10 @@ if submitted and (retrieve_apm or retrieve_servers):
                 st.write("Converting snapshot epoch timestamps to datetimes...")
                 print("Converting snapshot epoch timestamps to datetimes...")
                 if SNES:
-                    play_sound("sounds/smb_kick.wav", False)
+                    play_sound("sounds/smb_kick.wav")
 
-                all_snapshots_df['start_time'] = pd.to_datetime(all_snapshots_df['serverStartTime'], unit='ms')
-                all_snapshots_df['local_start_time'] = pd.to_datetime(all_snapshots_df['localStartTime'], unit='ms') 
+                all_snapshots_df['start_time'] = pd.to_datetime(all_snapshots_df['serverStartTime'], unit='ms', errors="ignore")
+                all_snapshots_df['local_start_time'] = pd.to_datetime(all_snapshots_df['localStartTime'], unit='ms', errors="ignore") 
 
                 # If you need to format them to a specific string representation
                 all_snapshots_df['start_time'] = all_snapshots_df['start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
@@ -1248,7 +1253,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                 st.write("Converting tier epoch timestamps to datetimes...")
                 print("Converting tier epoch timestamps to datetimes...")
                 if SNES:
-                    play_sound("sounds/smb_kick.wav", False)
+                    play_sound("sounds/smb_kick.wav")
 
                 if DEBUG:
                     debug_df(all_tiers_df, "all_tiers_df - post availability checks")
@@ -1258,7 +1263,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                 st.write("Converting node epoch timestamps to datetimes...")
                 print("Converting node epoch timestamps to datetimes...")
                 if SNES:
-                    play_sound("sounds/smb_kick.wav", False)
+                    play_sound("sounds/smb_kick.wav")
 
                 if DEBUG:
                     debug_df(all_nodes_df, "all_nodes_df - post avaialability checks")
@@ -1273,7 +1278,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                 st.write("Converting server epoch timestamps to datetimes...")
                 print("Converting server epoch timestamps to datetimes...")
                 if SNES:
-                    play_sound("sounds/smb_kick.wav", False)
+                    play_sound("sounds/smb_kick.wav")
 
                 if DEBUG:
                     debug_df(all_servers_df, "all_servers_df - post availability checks")

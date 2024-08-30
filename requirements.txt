@@ -5,3 +5,4 @@ xlsxwriter
 tabulate
 requests
 PyYAML
+pygame

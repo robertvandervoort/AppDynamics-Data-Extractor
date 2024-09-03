@@ -16,8 +16,8 @@ import gc
 import pygame
 
 #--- CONFIGURATION SECTION ---
-SNES = True
-DEBUG = True
+SNES = False
+DEBUG = False
 
 # Verify SSL certificates - should only be set false for on-prem controllers. Use this if the script fails right off the bat and gives you errors to the point..
 VERIFY_SSL = True
@@ -236,7 +236,7 @@ def return_apm_availability(metric_response):
     if status != "valid":
         if DEBUG:
             print(f"Validation of APM availability data failed. Status: {status} Data: {data}")
-            return None, None
+            return "", ""
 
     if status == "valid":
         # Check if any dictionary in the list has 'metricName' equal to 'METRIC DATA NOT FOUND'
@@ -245,7 +245,7 @@ def return_apm_availability(metric_response):
         # Use the condition in a conditional block
         if condition:
             print("Metric data not found!")
-            return None, None
+            return "", ""
         
         try:
             epoch, value = determine_availability(data, status)
@@ -256,7 +256,7 @@ def return_apm_availability(metric_response):
             print(f"Unexpected error during validation: of APM availability data: {e}")
             print(f"status: {status} data: {data}")
             input("press a key...")
-            return None, None      
+            return "", ""      
 
 def validate_json(response):
     """validation function to parse into JSON and catch empty sets returned from our API requests"""

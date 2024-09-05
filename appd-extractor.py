@@ -777,10 +777,11 @@ if 'applications_df' in st.session_state:
         application_id = ""
         #st.write("You selected app_ids:", selected_app_ids)
 
-"***Note: license usage analysis requires APM and server data***"
+"***Note: license usage analysis (BETA) requires APM and server data***"
 retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes)?", value=True)    
 retrieve_servers = st.checkbox("Retrieve all machine agent data?", value=True)
-pull_snapshots = st.checkbox("Get Snapshots?", value=False)
+if retrieve_apm:
+    pull_snapshots = st.checkbox("Get Snapshots?", value=False)
 
 # --- User config form ---
 with st.form("config_form"):

@@ -805,7 +805,7 @@ with st.form("config_form"):
     
     if pull_snapshots:
         "### Snapshot options"
-        snapshot_duration_mins = st.text_input("How far to look back for snapshots? (mins)", value="60")
+        snapshot_duration_mins = st.text_input("How far to look back for snapshots? (mins)", value=60)
         first_in_chain = st.checkbox("Capture only first in chain snapshots?", value=True)
         need_exit_calls = st.checkbox("Return exit call data with snapshots?", value=False)
         need_props = st.checkbox("Return data collector data with snapshots?", value=False)
@@ -889,7 +889,7 @@ if submitted and (retrieve_apm or retrieve_servers):
         
         if pull_snapshots:
             PULL_SNAPSHOTS = pull_snapshots
-            if snapshot_duration_mins >= 20160:
+            if int(snapshot_duration_mins) >= 20160:
                 st.write("Changed snapshot duration to 20159 (two week limit)")
                 snapshot_duration_mins = 20159
             SNAPSHOT_DURATION_MINS = snapshot_duration_mins

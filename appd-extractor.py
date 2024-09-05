@@ -177,9 +177,9 @@ def get_SIM_availability(hierarchy_list, hostId, type):
 
     #build the metric url using the hierarchy, hostId and metric duration
     if type == "PHYSICAL": #use availability metric
-        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CMachine%7CAvailability&time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&output=json"
+        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CMachine%7CAvailability&time-range-type=BEFORE_NOW&duration-in-mins=" + str(MACHINE_METRIC_DURATION_MINS) + "&output=json"
     elif type == "CONTAINER": #use CPU busy since availability metric doesn't exist
-        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CCPU%7C%25Busy&time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&output=json"
+        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CCPU%7C%25Busy&time-range-type=BEFORE_NOW&duration-in-mins=" + str(MACHINE_METRIC_DURATION_MINS) + "&output=json"
     if DEBUG:
         print(f"        --- SIM availability metric url: {metric_url}")
 
@@ -188,7 +188,7 @@ def get_SIM_availability(hierarchy_list, hostId, type):
         headers = __session__.headers,
         verify = VERIFY_SSL
     )
-
+    
     return metric_response
 
 @handle_rest_errors
@@ -215,7 +215,7 @@ def get_apm_availability(object_type, app, tier, agenttype, node):
         else:
             metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CAgent%7CApp%7CAvailability"
 
-    metric_url = BASE_URL + "/controller/rest/applications/" + app + "/metric-data?metric-path=" + metric_path + "&time-range-type=BEFORE_NOW&duration-in-mins=" + str(METRIC_DURATION_MINS) + "&rollup=" + METRIC_ROLLUP + "&output=json"
+    metric_url = BASE_URL + "/controller/rest/applications/" + app + "/metric-data?metric-path=" + metric_path + "&time-range-type=BEFORE_NOW&duration-in-mins=" + str(APM_METRIC_DURATION_MINS) + "&rollup=" + METRIC_ROLLUP + "&output=json"
                                 
     #get metric data
     if DEBUG:
@@ -235,16 +235,15 @@ def return_apm_availability(metric_response):
 
     if status != "valid":
         if DEBUG:
-            print(f"Validation of APM availability data failed. Status: {status} Data: {data}")
-            return "", ""
+            print(f"            --- Validation of APM availability data failed. Status: {status} Data: {data}")
+        return "", ""
 
     if status == "valid":
-        # Check if any dictionary in the list has 'metricName' equal to 'METRIC DATA NOT FOUND'
+        # Check if any dictionary in the list has 'metricName' equal to 'METRIC DATA NOT FOUND' and jump out early if so
         condition = any(d['metricName'] == 'METRIC DATA NOT FOUND' for d in data)
 
-        # Use the condition in a conditional block
         if condition:
-            print("Metric data not found!")
+            print("            --- Metric data not found!")
             return "", ""
         
         try:
@@ -253,9 +252,8 @@ def return_apm_availability(metric_response):
         
         except Exception as e:
             st.write(f"Unexpected error during validation: of APM availability data: {e}")
-            print(f"Unexpected error during validation: of APM availability data: {e}")
-            print(f"status: {status} data: {data}")
-            input("press a key...")
+            print(f"            --- Unexpected error during validation: of APM availability data: {e}")
+            print(f"            --- status: {status} data: {data}")
             return "", ""      
 
 def validate_json(response):
@@ -778,10 +776,12 @@ if 'applications_df' in st.session_state:
         #st.write("You selected app_ids:", selected_app_ids)
 
 "***Note: license usage analysis (BETA) requires APM and server data***"
-retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes)?", value=True)    
+retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes, etc)?", value=True)    
 retrieve_servers = st.checkbox("Retrieve all machine agent data?", value=True)
 if retrieve_apm:
-    pull_snapshots = st.checkbox("Get Snapshots?", value=False)
+    pull_snapshots = st.checkbox("Retrieve transaction snapshots?", value=False)
+else:
+    pull_snapshots = False
 
 # --- User config form ---
 with st.form("config_form"):
@@ -798,8 +798,8 @@ with st.form("config_form"):
     
     if retrieve_apm:
         "### APM options"
-        calc_availability = st.checkbox("Analyze tier, node and server availability?", value=True)
-        metric_duration_mins = st.text_input("How far to look back for availability? (mins)", value="60")
+        calc_apm_availability = st.checkbox("Analyze tier and node availability?", value=True)
+        apm_metric_duration_mins = st.text_input("How far to look back for APM availability? (mins)", value="60")
         #add this back at some point maybe
         #metric_rollup = st.checkbox("Rollup metrics?", value=False)
     
@@ -810,8 +810,10 @@ with st.form("config_form"):
         need_exit_calls = st.checkbox("Return exit call data with snapshots?", value=False)
         need_props = st.checkbox("Return data collector data with snapshots?", value=False)
     
-    #if retrieve_servers:
-        #"### Servers"
+    if retrieve_servers:
+        "### Servers"
+        calc_machine_availability = st.checkbox("Analyze server availability?", value=True)
+        machine_metric_duration_mins = st.text_input("How far to look back for machine availability? (mins)", value="60")
         #normalize = st.checkbox("Break out server properties into columns?", value=False)
         #normalize = True
     
@@ -825,7 +827,7 @@ if debug_output:
 if connect_button:
     global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
         APPLICATION_ID, METRIC_DURATION_MINS, PULL_SNAPSHOTS, FIRST_IN_CHAIN, \
-        CALC_AVAILABILITY
+        CALC_APM_AVAILABILITY
     
     # Update global variables with user input
     APPDYNAMICS_ACCOUNT_NAME = account_name
@@ -863,20 +865,55 @@ if submitted and (retrieve_apm or retrieve_servers):
     APPDYNAMICS_ACCOUNT_NAME = account_name
     APPDYNAMICS_API_CLIENT = api_client
     APPDYNAMICS_API_CLIENT_SECRET = api_key
-    if not selected_app_ids and application_id:    
-        APPLICATION_ID = application_id
-    if not selected_app_ids and application_id == "":
-        st.write("You must select an application or an application_id to continue.")
-        st.rerun()
-    if selected_app_ids:
-        APPLICATION_ID = ""
+    
+    if retrieve_apm:
+        if not selected_app_ids:
+            if not application_id:
+                APPLICATION_ID = ""
+            else:
+                APPLICATION_ID = application_id
 
-    METRIC_DURATION_MINS = metric_duration_mins
-    CALC_AVAILABILITY = calc_availability
-    PULL_SNAPSHOTS = pull_snapshots
-    SNAPSHOT_DURATION_MINS = snapshot_duration_mins
-    #NORMALIZE = normalize
-    NORMALIZE = True
+        if not selected_app_ids and application_id == "" and not retrieve_servers:
+            st.write("You must select an application or an application_id to continue.")
+            st.rerun()
+        if selected_app_ids:
+            APPLICATION_ID = ""
+
+        if calc_apm_availability:
+            CALC_APM_AVAILABILITY = calc_apm_availability
+            APM_METRIC_DURATION_MINS = apm_metric_duration_mins
+        else:
+            CALC_APM_AVAILABILITY = False
+        
+        if pull_snapshots:
+            PULL_SNAPSHOTS = pull_snapshots
+            SNAPSHOT_DURATION_MINS = snapshot_duration_mins
+
+            if first_in_chain:
+                FIRST_IN_CHAIN = "true"
+            else:
+                FIRST_IN_CHAIN = "false"
+
+            if need_exit_calls:
+                NEED_EXIT_CALLS = "true"
+            else:
+                NEED_EXIT_CALLS = "false"
+            
+            if need_props:
+                NEED_PROPS = "true"
+            else:
+                NEED_PROPS = "false"    
+
+    if retrieve_servers:    
+        if calc_machine_availability:
+            CALC_MACHINE_AVAILABILITY = calc_machine_availability
+            MACHINE_METRIC_DURATION_MINS = machine_metric_duration_mins
+        else:
+            CALC_MACHINE_AVAILABILITY = False
+        
+        #NORMALIZE = normalize
+        NORMALIZE = True                                
+    
     DEBUG = debug_output
     
     # add this back at some point maybe
@@ -884,21 +921,6 @@ if submitted and (retrieve_apm or retrieve_servers):
     #    METRIC_ROLLUP = "true"
     #else:
     METRIC_ROLLUP = "false"
-
-    if first_in_chain:
-        FIRST_IN_CHAIN = "true"
-    else:
-        FIRST_IN_CHAIN = "false"
-
-    if need_exit_calls:
-        NEED_EXIT_CALLS = "true"
-    else:
-        NEED_EXIT_CALLS = "false"
-    
-    if need_props:
-        NEED_PROPS = "true"
-    else:
-        NEED_PROPS = "false"
 
     # Replace with the desired output file path and name or leave as it to create dynamically (recommended)
     OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"_analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
@@ -1033,7 +1055,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         if SNES:
                             play_sound("sounds/smb_coin.wav")
 
-                        if CALC_AVAILABILITY:
+                        if CALC_APM_AVAILABILITY:
                             print(f"Calculating availability for {tiers_df.shape[0]} tiers.")
                             st.write(f"Calculating availability for {tiers_df.shape[0]} tiers.")
                             
@@ -1079,7 +1101,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         if SNES:
                             play_sound("sounds/smb_coin.wav")
                 
-                        if CALC_AVAILABILITY:
+                        if CALC_APM_AVAILABILITY:
                             print(f"Calculating availability for {nodes_df.shape[0]} nodes.")
                             st.write(f"Calculating availability for {nodes_df.shape[0]} nodes.")
 
@@ -1087,7 +1109,6 @@ if submitted and (retrieve_apm or retrieve_servers):
                             def get_last_seen(row):
                                 response = get_apm_availability("node", app_name, row['tierName'], row['agentType'], row['node_name'])
                                 epoch, value = return_apm_availability(response)
-                                print(f"epoch: {epoch} value: {value}")
                                 return epoch
                                 
                             # Apply the function and create the new column
@@ -1213,16 +1234,19 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                 if DEBUG:
                     debug_df(all_servers_df, "all_servers_df")
-
+                
+                if SNES:
+                            play_sound("sounds/smb_coin.wav")
+                
                 st.write(f"Found {all_servers_df.shape[0]} servers.")
 
-                if CALC_AVAILABILITY:
+                if CALC_MACHINE_AVAILABILITY:
                     st.write(f"Determining availability for each of {all_servers_df.shape[0]} servers. Please be patient...")              
                     
                     # Function to apply to each row
                     def get_last_seen(row):
                         response = get_SIM_availability(row['hierarchy'], row['hostId'], row['type'])
-                        epoch, value = return_apm_availability(response)
+                        epoch, _ = return_apm_availability(response)
                         return epoch
                     
                     # Apply the function and create the new column
@@ -1236,56 +1260,59 @@ if submitted and (retrieve_apm or retrieve_servers):
                 print(f"        --- No servers returned. Status: {servers_status} Response: {servers}")
 
         #Convert epoch timestamps to datetime
-        if CALC_AVAILABILITY:
-            if PULL_SNAPSHOTS:
-                st.write("Converting snapshot epoch timestamps to datetimes...")
-                print("Converting snapshot epoch timestamps to datetimes...")
-                if SNES:
-                    play_sound("sounds/smb_kick.wav")
+        if retrieve_apm:
+            if CALC_APM_AVAILABILITY:
+                if not all_snapshots_df.empty:
+                    st.write("Converting snapshot epoch timestamps to datetimes...")
+                    print("Converting snapshot epoch timestamps to datetimes...")
+                    if SNES:
+                        play_sound("sounds/smb_kick.wav")
 
-                all_snapshots_df['start_time'] = pd.to_datetime(all_snapshots_df['serverStartTime'], unit='ms', errors="ignore")
-                all_snapshots_df['local_start_time'] = pd.to_datetime(all_snapshots_df['localStartTime'], unit='ms', errors="ignore") 
+                    all_snapshots_df['start_time'] = pd.to_datetime(all_snapshots_df['serverStartTime'], unit='ms', errors="ignore")
+                    all_snapshots_df['local_start_time'] = pd.to_datetime(all_snapshots_df['localStartTime'], unit='ms', errors="ignore") 
 
-                # If you need to format them to a specific string representation
-                all_snapshots_df['start_time'] = all_snapshots_df['start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
-                all_snapshots_df['local_start_time'] = all_snapshots_df['local_start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
-            
-            if not all_nodes_df.empty:
-                st.write("Converting tier epoch timestamps to datetimes...")
-                print("Converting tier epoch timestamps to datetimes...")
-                if SNES:
-                    play_sound("sounds/smb_kick.wav")
-
-                if DEBUG:
-                    debug_df(all_tiers_df, "all_tiers_df - post availability checks")
-
-                all_tiers_df['Last Seen Tier'] = pd.to_datetime(all_tiers_df['Last Seen Tier'], unit='ms')
+                    # If you need to format them to a specific string representation
+                    all_snapshots_df['start_time'] = all_snapshots_df['start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
+                    all_snapshots_df['local_start_time'] = all_snapshots_df['local_start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
                 
-                st.write("Converting node epoch timestamps to datetimes...")
-                print("Converting node epoch timestamps to datetimes...")
-                if SNES:
-                    play_sound("sounds/smb_kick.wav")
+                if not all_nodes_df.empty:
+                    st.write("Converting tier epoch timestamps to datetimes...")
+                    print("Converting tier epoch timestamps to datetimes...")
+                    if SNES:
+                        play_sound("sounds/smb_kick.wav")
 
-                if DEBUG:
-                    debug_df(all_nodes_df, "all_nodes_df - post avaialability checks")
+                    if DEBUG:
+                        debug_df(all_tiers_df, "all_tiers_df - post availability checks")
 
-                all_nodes_df['Last Seen Node'] = pd.to_datetime(all_nodes_df['Last Seen Node'], unit='ms') 
+                    all_tiers_df['Last Seen Tier'] = pd.to_datetime(all_tiers_df['Last Seen Tier'], unit='ms')
+                    
+                    st.write("Converting node epoch timestamps to datetimes...")
+                    print("Converting node epoch timestamps to datetimes...")
+                    if SNES:
+                        play_sound("sounds/smb_kick.wav")
 
-                # format them to a specific string representation
-                all_tiers_df['Last Seen Tier'] = all_tiers_df['Last Seen Tier'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
-                all_nodes_df['Last Seen Node'] = all_nodes_df['Last Seen Node'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
+                    if DEBUG:
+                        debug_df(all_nodes_df, "all_nodes_df - post avaialability checks")
 
-            if not all_servers_df.empty:
-                st.write("Converting server epoch timestamps to datetimes...")
-                print("Converting server epoch timestamps to datetimes...")
-                if SNES:
-                    play_sound("sounds/smb_kick.wav")
+                    all_nodes_df['Last Seen Node'] = pd.to_datetime(all_nodes_df['Last Seen Node'], unit='ms') 
 
-                if DEBUG:
-                    debug_df(all_servers_df, "all_servers_df - post availability checks")
+                    # format them to a specific string representation
+                    all_tiers_df['Last Seen Tier'] = all_tiers_df['Last Seen Tier'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
+                    all_nodes_df['Last Seen Node'] = all_nodes_df['Last Seen Node'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
+            
+        if retrieve_servers:
+            if CALC_MACHINE_AVAILABILITY:
+                if not all_servers_df.empty:
+                    st.write("Converting server epoch timestamps to datetimes...")
+                    print("Converting server epoch timestamps to datetimes...")
+                    if SNES:
+                        play_sound("sounds/smb_kick.wav")
 
-                all_servers_df['Last Seen Server'] = pd.to_datetime(all_servers_df['Last Seen Server'], unit='ms')
-                all_servers_df['Last Seen Server'] = all_servers_df['Last Seen Server'].dt.strftime('%m/%d/%Y %I:%M:%S %p')    
+                    if DEBUG:
+                        debug_df(all_servers_df, "all_servers_df - post availability checks")
+
+                    all_servers_df['Last Seen Server'] = pd.to_datetime(all_servers_df['Last Seen Server'], unit='ms')
+                    all_servers_df['Last Seen Server'] = all_servers_df['Last Seen Server'].dt.strftime('%m/%d/%Y %I:%M:%S %p')    
 
         #merge things
         st.write("Performing merge on data to make it human-friendly...")
@@ -1639,19 +1666,9 @@ if submitted and (retrieve_apm or retrieve_servers):
                     else:
                         st.write(f"{df_name} empty, skipping write.")
 
-                writer.close()
-
                 st.write("*Finished.* :sunglasses:")
                 if DEBUG:
                     print("Finished.")
-
-                # Open the Excel file
-                if sys.platform == "win32":
-                    os.startfile(OUTPUT_EXCEL_FILE) 
-                elif sys.platform == "darwin":  # macOS
-                    subprocess.call(["open", OUTPUT_EXCEL_FILE])
-                else:  # Linux or other Unix-like systems
-                    subprocess.call(["xdg-open", OUTPUT_EXCEL_FILE])
 
         except PermissionError:
             st.warning(f"Unable to write to {OUTPUT_EXCEL_FILE}. Please check permissions.")
@@ -1662,3 +1679,11 @@ if submitted and (retrieve_apm or retrieve_servers):
             keep_status_open = True
 
     status.update(label="Extraction complete!", state="complete", expanded=keep_status_open)
+
+    # Open the Excel file
+    if sys.platform == "win32":
+        os.startfile(OUTPUT_EXCEL_FILE) 
+    elif sys.platform == "darwin":  # macOS
+        subprocess.call(["open", OUTPUT_EXCEL_FILE])
+    else:  # Linux or other Unix-like systems
+        subprocess.call(["xdg-open", OUTPUT_EXCEL_FILE])

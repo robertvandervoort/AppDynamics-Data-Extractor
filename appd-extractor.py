@@ -813,7 +813,8 @@ with st.form("config_form"):
     if retrieve_servers:
         "### Servers"
         calc_machine_availability = st.checkbox("Analyze server availability?", value=True)
-        machine_metric_duration_mins = st.text_input("How far to look back for machine availability? (mins)", value="60")
+        if calc_machine_availability:
+            machine_metric_duration_mins = st.text_input("How far to look back for machine availability? (mins)", value="60")
         #normalize = st.checkbox("Break out server properties into columns?", value=False)
         #normalize = True
     
@@ -884,6 +885,7 @@ if submitted and (retrieve_apm or retrieve_servers):
             APM_METRIC_DURATION_MINS = apm_metric_duration_mins
         else:
             CALC_APM_AVAILABILITY = False
+            APM_METRIC_DURATION_MINS = 0
         
         if pull_snapshots:
             PULL_SNAPSHOTS = pull_snapshots
@@ -910,6 +912,7 @@ if submitted and (retrieve_apm or retrieve_servers):
             MACHINE_METRIC_DURATION_MINS = machine_metric_duration_mins
         else:
             CALC_MACHINE_AVAILABILITY = False
+            MACHINE_METRIC_DURATION_MINS = 0
         
         #NORMALIZE = normalize
         NORMALIZE = True                                
@@ -993,8 +996,8 @@ if submitted and (retrieve_apm or retrieve_servers):
                 current_date_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
                 information_df = pd.DataFrame({
-                    "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "APPDYNAMICS_API_CLIENT_SECRET", "APPLICATION_ID", "METRIC_DURATION_MINS", "METRIC_ROLLUP", "PULL_SNAPSHOTS"],
-                    "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, "xxx", APPLICATION_ID, METRIC_DURATION_MINS, METRIC_ROLLUP, PULL_SNAPSHOTS]
+                    "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "APPDYNAMICS_API_CLIENT_SECRET", "Selected Apps", "or application id", "APM availability (mins)", "Machine availability (mins)", "METRIC_ROLLUP", "Retrieve snapshots"],
+                    "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, "xxx", selected_apps, APPLICATION_ID, APM_METRIC_DURATION_MINS, MACHINE_METRIC_DURATION_MINS, METRIC_ROLLUP, PULL_SNAPSHOTS]
                 })
 
                 # Process each application

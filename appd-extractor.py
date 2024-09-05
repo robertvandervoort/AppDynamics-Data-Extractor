@@ -889,6 +889,9 @@ if submitted and (retrieve_apm or retrieve_servers):
         
         if pull_snapshots:
             PULL_SNAPSHOTS = pull_snapshots
+            if snapshot_duration_mins >= 20160:
+                st.write("Changed snapshot duration to 20159 (two week limit)")
+                snapshot_duration_mins = 20159
             SNAPSHOT_DURATION_MINS = snapshot_duration_mins
 
             if first_in_chain:

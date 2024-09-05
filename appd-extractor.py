@@ -1267,7 +1267,7 @@ if submitted and (retrieve_apm or retrieve_servers):
 
         #Convert epoch timestamps to datetime
         if retrieve_apm:
-            if CALC_APM_AVAILABILITY:
+            if pull_snapshots:
                 if not all_snapshots_df.empty:
                     st.write("Converting snapshot epoch timestamps to datetimes...")
                     print("Converting snapshot epoch timestamps to datetimes...")
@@ -1280,8 +1280,9 @@ if submitted and (retrieve_apm or retrieve_servers):
                     # If you need to format them to a specific string representation
                     all_snapshots_df['start_time'] = all_snapshots_df['start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
                     all_snapshots_df['local_start_time'] = all_snapshots_df['local_start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
-                
-                if not all_nodes_df.empty:
+            
+            if CALC_APM_AVAILABILITY:    
+                if not all_tiers_df.empty:
                     st.write("Converting tier epoch timestamps to datetimes...")
                     print("Converting tier epoch timestamps to datetimes...")
                     if SNES:
@@ -1292,6 +1293,10 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                     all_tiers_df['Last Seen Tier'] = pd.to_datetime(all_tiers_df['Last Seen Tier'], unit='ms')
                     
+                    # format them to a specific string representation
+                    all_tiers_df['Last Seen Tier'] = all_tiers_df['Last Seen Tier'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
+                    
+                if not all_nodes_df.empty:
                     st.write("Converting node epoch timestamps to datetimes...")
                     print("Converting node epoch timestamps to datetimes...")
                     if SNES:
@@ -1303,7 +1308,6 @@ if submitted and (retrieve_apm or retrieve_servers):
                     all_nodes_df['Last Seen Node'] = pd.to_datetime(all_nodes_df['Last Seen Node'], unit='ms') 
 
                     # format them to a specific string representation
-                    all_tiers_df['Last Seen Tier'] = all_tiers_df['Last Seen Tier'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
                     all_nodes_df['Last Seen Node'] = all_nodes_df['Last Seen Node'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
             
         if retrieve_servers:

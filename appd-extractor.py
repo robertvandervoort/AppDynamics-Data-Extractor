@@ -502,7 +502,7 @@ def get_app_backends(application_id):
 @handle_rest_errors
 def get_snapshots(application_id):
     """Gets snapshot data from an application"""
-    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(snapshot_duration_mins) + "&first-in-chain=" + first_in_chain + "&need-exit-calls=" + NEED_EXIT_CALLS + "&need-props=" + NEED_PROPS + "&maximum-results=1000000&output=json"
+    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(snapshot_duration_mins) + "&first-in-chain=" + first_in_chain + "&need-exit-calls=" + need_exit_calls + "&need-props=" + NEED_PROPS + "&maximum-results=1000000&output=json"
 
     if DEBUG:
         print("    --- Fetching snapshots from: "+ snapshots_url)

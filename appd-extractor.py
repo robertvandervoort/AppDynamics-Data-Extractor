@@ -16,11 +16,18 @@ import gc
 import pygame
 
 #--- CONFIGURATION SECTION ---
-SNES = False
+snes = False
 DEBUG = False
+    
+# add this back at some point maybe as use option
+normalize = True 
+metric_rollup = "false"
 
 # Verify SSL certificates - should only be set false for on-prem controllers. Use this if the script fails right off the bat and gives you errors to the point..
 VERIFY_SSL = True
+
+# used to keep the status window open if there are errors
+keep_status_open = False
 
 #manages token expiration - do not change these values
 last_token_fetch_time = ""
@@ -177,9 +184,9 @@ def get_SIM_availability(hierarchy_list, hostId, type):
 
     #build the metric url using the hierarchy, hostId and metric duration
     if type == "PHYSICAL": #use availability metric
-        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CMachine%7CAvailability&time-range-type=BEFORE_NOW&duration-in-mins=" + str(MACHINE_METRIC_DURATION_MINS) + "&output=json"
+        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CMachine%7CAvailability&time-range-type=BEFORE_NOW&duration-in-mins=" + str(machine_metric_duration_mins) + "&output=json"
     elif type == "CONTAINER": #use CPU busy since availability metric doesn't exist
-        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CCPU%7C%25Busy&time-range-type=BEFORE_NOW&duration-in-mins=" + str(MACHINE_METRIC_DURATION_MINS) + "&output=json"
+        metric_url = BASE_URL + "/controller/rest/applications/Server%20%26%20Infrastructure%20Monitoring/metric-data?metric-path=Application%20Infrastructure%20Performance%7CRoot%5C%7C" + hierarchy + "%7CIndividual%20Nodes%7C" + hostId + "%7CHardware%20Resources%7CCPU%7C%25Busy&time-range-type=BEFORE_NOW&duration-in-mins=" + str(machine_metric_duration_mins) + "&output=json"
     if DEBUG:
         print(f"        --- SIM availability metric url: {metric_url}")
 
@@ -215,7 +222,7 @@ def get_apm_availability(object_type, app, tier, agenttype, node):
         else:
             metric_path = "Application%20Infrastructure%20Performance%7C" + tier + "%7CAgent%7CApp%7CAvailability"
 
-    metric_url = BASE_URL + "/controller/rest/applications/" + app + "/metric-data?metric-path=" + metric_path + "&time-range-type=BEFORE_NOW&duration-in-mins=" + str(APM_METRIC_DURATION_MINS) + "&rollup=" + METRIC_ROLLUP + "&output=json"
+    metric_url = BASE_URL + "/controller/rest/applications/" + app + "/metric-data?metric-path=" + metric_path + "&time-range-type=BEFORE_NOW&duration-in-mins=" + str(apm_metric_duration_mins) + "&rollup=" + metric_rollup + "&output=json"
                                 
     #get metric data
     if DEBUG:
@@ -495,7 +502,7 @@ def get_app_backends(application_id):
 @handle_rest_errors
 def get_snapshots(application_id):
     """Gets snapshot data from an application"""
-    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(SNAPSHOT_DURATION_MINS) + "&first-in-chain=" + FIRST_IN_CHAIN + "&need-exit-calls=" + NEED_EXIT_CALLS + "&need-props=" + NEED_PROPS + "&maximum-results=1000000&output=json"
+    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(snapshot_duration_mins) + "&first-in-chain=" + first_in_chain + "&need-exit-calls=" + NEED_EXIT_CALLS + "&need-props=" + NEED_PROPS + "&maximum-results=1000000&output=json"
 
     if DEBUG:
         print("    --- Fetching snapshots from: "+ snapshots_url)
@@ -698,7 +705,7 @@ def calculate_licenses(df):
 
 def debug_df(df, df_name, num_lines=10):
     """Displays DataFrame information in a more readable way."""
-    if SNES:
+    if snes:
         play_sound("sounds/smb_coin.wav")
 
     st.subheader(f"Debug Info: {df_name}")  # Use subheader instead of nested expander
@@ -813,8 +820,7 @@ with st.form("config_form"):
     if retrieve_servers:
         "### Servers"
         calc_machine_availability = st.checkbox("Analyze server availability?", value=True)
-        if calc_machine_availability:
-            machine_metric_duration_mins = st.text_input("How far to look back for machine availability? (mins)", value="60")
+        machine_metric_duration_mins = st.text_input("How far to look back for machine availability? (mins)", value="60")
         #normalize = st.checkbox("Break out server properties into columns?", value=False)
         #normalize = True
     
@@ -823,18 +829,15 @@ with st.form("config_form"):
 
 debug_output = st.checkbox("Debug output?", value=False)
 if debug_output:
-    SNES = st.checkbox("8-bit my debug!")
+    snes = st.checkbox("8-bit my debug!", value=False)
 
 if connect_button:
-    global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET, \
-        APPLICATION_ID, METRIC_DURATION_MINS, PULL_SNAPSHOTS, FIRST_IN_CHAIN, \
-        CALC_APM_AVAILABILITY
-    
+    global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET    
     # Update global variables with user input
     APPDYNAMICS_ACCOUNT_NAME = account_name
     APPDYNAMICS_API_CLIENT = api_client
     APPDYNAMICS_API_CLIENT_SECRET = api_key
-    APPLICATION_ID = ""
+    application_id = ""
 
     st.write("Connecting to retrieve applications list...")
     print("Connecting to retrieve applications list...")
@@ -859,7 +862,7 @@ if save_button:
 
 # --- Main application code ---
 if submitted and (retrieve_apm or retrieve_servers):
-    if SNES:
+    if snes:
         play_sound("sounds/smb_jump-small.wav")
                 
     # Update global variables with user input
@@ -870,63 +873,28 @@ if submitted and (retrieve_apm or retrieve_servers):
     if retrieve_apm:
         if not selected_app_ids:
             if not application_id:
-                APPLICATION_ID = ""
-            else:
-                APPLICATION_ID = application_id
+                application_id = ""
+        else:
+            application_id = ""
 
         if not selected_app_ids and application_id == "" and not retrieve_servers:
             st.write("You must select an application or an application_id to continue.")
             st.rerun()
-        if selected_app_ids:
-            APPLICATION_ID = ""
 
-        if calc_apm_availability:
-            CALC_APM_AVAILABILITY = calc_apm_availability
-            APM_METRIC_DURATION_MINS = apm_metric_duration_mins
-        else:
-            CALC_APM_AVAILABILITY = False
-            APM_METRIC_DURATION_MINS = 0
+        if not calc_apm_availability:
+            apm_metric_duration_mins = 0
         
         if pull_snapshots:
-            PULL_SNAPSHOTS = pull_snapshots
             if int(snapshot_duration_mins) >= 20160:
                 st.write("Changed snapshot duration to 20159 (two week limit)")
                 snapshot_duration_mins = 20159
-            SNAPSHOT_DURATION_MINS = snapshot_duration_mins
-
-            if first_in_chain:
-                FIRST_IN_CHAIN = "true"
-            else:
-                FIRST_IN_CHAIN = "false"
-
-            if need_exit_calls:
-                NEED_EXIT_CALLS = "true"
-            else:
-                NEED_EXIT_CALLS = "false"
-            
-            if need_props:
-                NEED_PROPS = "true"
-            else:
-                NEED_PROPS = "false"    
-
-    if retrieve_servers:    
-        if calc_machine_availability:
-            CALC_MACHINE_AVAILABILITY = calc_machine_availability
-            MACHINE_METRIC_DURATION_MINS = machine_metric_duration_mins
         else:
-            CALC_MACHINE_AVAILABILITY = False
-            MACHINE_METRIC_DURATION_MINS = 0
-        
-        #NORMALIZE = normalize
-        NORMALIZE = True                                
+            snapshot_duration_mins = 0    
+
+    if not retrieve_servers:
+        machine_metric_duration_mins = 0                       
     
     DEBUG = debug_output
-    
-    # add this back at some point maybe
-    #if metric_rollup:
-    #    METRIC_ROLLUP = "true"
-    #else:
-    METRIC_ROLLUP = "false"
 
     # Replace with the desired output file path and name or leave as it to create dynamically (recommended)
     OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"_analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
@@ -936,9 +904,6 @@ if submitted and (retrieve_apm or retrieve_servers):
     BASE_URL = "https://"+APPDYNAMICS_ACCOUNT_NAME+".saas.appdynamics.com"
 
     # --- MAIN application code
-    # set this for later to keep the status window open if there are errors
-    keep_status_open = False
-
     with st.status("Extracting data...", expanded=True) as status:
         st.write(f"Logging into controller at {BASE_URL}...")
         authenticate("initial")
@@ -954,6 +919,7 @@ if submitted and (retrieve_apm or retrieve_servers):
         healthRules_df = pd.DataFrame()
         snapshots_df = pd.DataFrame()
 
+        #initialize aggregate dataframes
         all_bts_df = pd.DataFrame()
         all_tiers_df = pd.DataFrame()
         all_nodes_df = pd.DataFrame()
@@ -991,7 +957,7 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                 st.write(f"Found {applications_df.shape[0]} applications.")
 
-                if SNES:
+                if snes:
                     play_sound("sounds/smb_coin.wav")
                 
                 #get current date and time and build info sheet - shoutout to Peter Wivagg for the suggestion
@@ -999,8 +965,8 @@ if submitted and (retrieve_apm or retrieve_servers):
                 current_date_time = now.strftime("%Y-%m-%d %H:%M:%S")
 
                 information_df = pd.DataFrame({
-                    "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "APPDYNAMICS_API_CLIENT_SECRET", "Selected Apps", "or application id", "APM availability (mins)", "Machine availability (mins)", "METRIC_ROLLUP", "Retrieve snapshots"],
-                    "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, "xxx", selected_apps, APPLICATION_ID, APM_METRIC_DURATION_MINS, MACHINE_METRIC_DURATION_MINS, METRIC_ROLLUP, PULL_SNAPSHOTS]
+                    "setting": ["RUN_DATE","BASE_URL", "APPDYNAMICS_ACCOUNT_NAME", "APPDYNAMICS_API_CLIENT", "Selected Apps", "or application id", "APM availability (mins)", "Machine availability (mins)", "metric_rollup", "Retrieve snapshots", "Snapshot range (mins)"],
+                    "value": [current_date_time, BASE_URL, APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, selected_apps, application_id, apm_metric_duration_mins, machine_metric_duration_mins, metric_rollup, pull_snapshots, snapshot_duration_mins]
                 })
 
                 # Process each application
@@ -1016,7 +982,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                     bts_data, bts_status = bts_response
                     
                     if bts_status == "valid":
-                        if SNES:
+                        if snes:
                             play_sound("sounds/smb_coin.wav")
                             
                         bts_df['app_id'] = app_id
@@ -1032,7 +998,7 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                         st.write(f"Found {bts_df.shape[0]} business transactions.")
                         
-                        if SNES:
+                        if snes:
                             play_sound("sounds/smb_coin.wav")
 
                         all_bts_df = pd.concat([all_bts_df, bts_df])
@@ -1058,10 +1024,10 @@ if submitted and (retrieve_apm or retrieve_servers):
                             #input("PRESS ANY KEY")
 
                         st.write(f"Found {tiers_df.shape[0]} tiers.")
-                        if SNES:
+                        if snes:
                             play_sound("sounds/smb_coin.wav")
 
-                        if CALC_APM_AVAILABILITY:
+                        if calc_apm_availability:
                             print(f"Calculating availability for {tiers_df.shape[0]} tiers.")
                             st.write(f"Calculating availability for {tiers_df.shape[0]} tiers.")
                             
@@ -1104,10 +1070,10 @@ if submitted and (retrieve_apm or retrieve_servers):
                         
                         st.write(f"Found {nodes_df.shape[0]} nodes for {app_name}.")
                         
-                        if SNES:
+                        if snes:
                             play_sound("sounds/smb_coin.wav")
                 
-                        if CALC_APM_AVAILABILITY:
+                        if calc_apm_availability:
                             print(f"Calculating availability for {nodes_df.shape[0]} nodes.")
                             st.write(f"Calculating availability for {nodes_df.shape[0]} nodes.")
 
@@ -1125,7 +1091,7 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                         all_nodes_df = pd.concat([all_nodes_df, nodes_df])
 
-                        if SNES:
+                        if snes:
                             play_sound("sounds/smb_powerup.wav")
                     
                     else:
@@ -1152,7 +1118,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                         
                         all_backends_df = pd.concat([all_backends_df, backends_df])
 
-                        if SNES:
+                        if snes:
                             play_sound("sounds/smb_coin.wav")
 
                     else:
@@ -1174,14 +1140,14 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                         all_healthRules_df = pd.concat([all_healthRules_df, healthRules_df])
 
-                        if SNES:
+                        if snes:
                             play_sound("sounds/smb_coin.wav")
 
                     else:
                         st.write(f"No health rules found for: {app_name} status: {healthRules_status}")
 
                     # Get and process snapshots
-                    if PULL_SNAPSHOTS:
+                    if pull_snapshots:
                         st.write(f"Retrieving snapshots for {app_name}...")
                         snapshots_response = get_snapshots(app_id)
                         snapshots, snapshots_status = validate_json(snapshots_response)
@@ -1213,14 +1179,14 @@ if submitted and (retrieve_apm or retrieve_servers):
                             # create deep links for the snapshots
                             st.write(f"Creating deep links for snapshots in {app_name}...")
                             print(f"Creating deep links for snapshots in {app_name}...")
-                            if SNES:
+                            if snes:
                                 play_sound("sounds/smb_kick.wav")
 
                             snapshots_df['snapshot_link'] = snapshots_df.apply(contruct_snapshot_link, axis=1)
 
                             all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
 
-                            if SNES:
+                            if snes:
                                 play_sound("sounds/smb_1-up.wav")
 
                         elif snapshots_status == "empty":
@@ -1241,12 +1207,12 @@ if submitted and (retrieve_apm or retrieve_servers):
                 if DEBUG:
                     debug_df(all_servers_df, "all_servers_df")
                 
-                if SNES:
+                if snes:
                             play_sound("sounds/smb_coin.wav")
                 
                 st.write(f"Found {all_servers_df.shape[0]} servers.")
 
-                if CALC_MACHINE_AVAILABILITY:
+                if calc_machine_availability:
                     st.write(f"Determining availability for each of {all_servers_df.shape[0]} servers. Please be patient...")              
                     
                     # Function to apply to each row
@@ -1271,7 +1237,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                 if not all_snapshots_df.empty:
                     st.write("Converting snapshot epoch timestamps to datetimes...")
                     print("Converting snapshot epoch timestamps to datetimes...")
-                    if SNES:
+                    if snes:
                         play_sound("sounds/smb_kick.wav")
 
                     all_snapshots_df['start_time'] = pd.to_datetime(all_snapshots_df['serverStartTime'], unit='ms', errors="ignore")
@@ -1281,11 +1247,11 @@ if submitted and (retrieve_apm or retrieve_servers):
                     all_snapshots_df['start_time'] = all_snapshots_df['start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p') 
                     all_snapshots_df['local_start_time'] = all_snapshots_df['local_start_time'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
             
-            if CALC_APM_AVAILABILITY:    
+            if calc_apm_availability:    
                 if not all_tiers_df.empty:
                     st.write("Converting tier epoch timestamps to datetimes...")
                     print("Converting tier epoch timestamps to datetimes...")
-                    if SNES:
+                    if snes:
                         play_sound("sounds/smb_kick.wav")
 
                     if DEBUG:
@@ -1299,7 +1265,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                 if not all_nodes_df.empty:
                     st.write("Converting node epoch timestamps to datetimes...")
                     print("Converting node epoch timestamps to datetimes...")
-                    if SNES:
+                    if snes:
                         play_sound("sounds/smb_kick.wav")
 
                     if DEBUG:
@@ -1311,11 +1277,11 @@ if submitted and (retrieve_apm or retrieve_servers):
                     all_nodes_df['Last Seen Node'] = all_nodes_df['Last Seen Node'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
             
         if retrieve_servers:
-            if CALC_MACHINE_AVAILABILITY:
+            if calc_machine_availability:
                 if not all_servers_df.empty:
                     st.write("Converting server epoch timestamps to datetimes...")
                     print("Converting server epoch timestamps to datetimes...")
-                    if SNES:
+                    if snes:
                         play_sound("sounds/smb_kick.wav")
 
                     if DEBUG:
@@ -1402,7 +1368,7 @@ if submitted and (retrieve_apm or retrieve_servers):
             del all_nodes_df
             gc.collect()
 
-            if NORMALIZE:
+            if normalize:
                 def parse_properties(data, prefix):
                     """
                     Parses the data (dictionary or list) into individual columns, prefixing the column names.

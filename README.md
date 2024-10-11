@@ -13,7 +13,9 @@ This tool simplifies the process of extracting and visualizing data from your Ap
      * Click the green "Code" button and choose "Open with GitHub Desktop."
      * Follow the prompts to clone the repository to your local machine.
 
-2. **Run the Extractor:**
+2. **Rename secrets.yml.template to secrets.yml
+
+3. **Run the Extractor:**
 
    * **Mac/Linux:**
       * **Prerequisites:** Make sure you have `pip` (Python package installer) installed.

@@ -160,7 +160,5 @@ cython_debug/
 #.idea/
 *.xlsx
 *.xlsm
+secrets.yml
 .DS_Store
-secrets.*
-secrets.yml
-secrets.yml

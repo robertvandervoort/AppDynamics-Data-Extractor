@@ -323,6 +323,38 @@ def validate_json(response):
             print(response.text)
         return None, "error"
 
+def validate_and_parse_xml(response, xpath):
+    """
+    Validates an XML response and converts it to a pandas DataFrame.
+
+    Args:
+        response: The requests.Response object containing the XML data.
+        xpath: The XPath expression to locate the parent of the repeating elements.
+
+    Returns:
+        A tuple containing:
+            - pandas.DataFrame: The DataFrame if successful, or an empty DataFrame if no data is found.
+            - str: Status string ("valid", "empty", or "error").
+    """
+    try:
+        if not response.content.decode().strip():  # Check for empty XML (after decoding)
+            return pd.DataFrame(), "empty"
+
+        xml_content = StringIO(response.content.decode())
+        
+        # Use pd.read_xml directly with the provided xpath
+        df = pd.read_xml(xml_content, xpath=xpath)
+        
+        if df.empty:
+            return df, "empty"
+        else:
+            return df, "valid"
+
+    except Exception as e:
+        error_type, error_value, _ = sys.exc_info()
+        print(f"An exception occurred converting XML to DataFrame: {error_type.__name__}: {error_value}")
+        return pd.DataFrame(), "error"  # Return an empty DataFrame on error
+
 def determine_availability(metric_data, metric_data_status):
     """Processes returned metric JSON data"""
     if DEBUG:
@@ -435,7 +467,7 @@ def get_app_nodes(application_id):
     """Gets all nodes in an app"""
     nodes_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/nodes?output=json"
     if DEBUG:
-        print(f"        --- Fetching node data from {nodes_url}.")
+        print(f"    --- Fetching node data from {nodes_url}.")
     else:
         print("        --- Fetching nodes from app.")
 
@@ -481,7 +513,7 @@ def get_app_backends(application_id):
     """Gets the backends in an app"""
     backends_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/backends?output=json"
     if DEBUG:
-        print(f"        --- Fetching backend data from {backends_url}.")
+        print(f"    --- Fetching backend data from {backends_url}.")
     else:
         print(f"        --- Fetching backends from application: {application_id}.")
 
@@ -502,7 +534,10 @@ def get_app_backends(application_id):
 @handle_rest_errors
 def get_snapshots(application_id):
     """Gets snapshot data from an application"""
-    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(snapshot_duration_mins) + "&first-in-chain=" + str(first_in_chain) + "&need-exit-calls=" + str(need_exit_calls) + "&need-props=" + str(need_props) + "&maximum-results=1000000&output=json"
+    snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + \
+        "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(snapshot_duration_mins) + \
+        "&first-in-chain=" + str(first_in_chain) + "&need-exit-calls=" + str(need_exit_calls) + \
+        "&need-props=" + str(need_props) + "&maximum-results=1000000"
 
     if DEBUG:
         print("    --- Fetching snapshots from: "+ snapshots_url)
@@ -517,12 +552,13 @@ def get_snapshots(application_id):
         headers = __session__.headers,
         verify = VERIFY_SSL
     )
+    
     #if DEBUG:
     #    print(f"    --- get_snapshots response: {snapshots_response.text}")
 
     return snapshots_response
 
-#@handle_rest_errors
+@handle_rest_errors
 def get_bts(application_id): 
     '''retrieves business transactions list from the application'''
     bts_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + "/business-transactions"
@@ -543,31 +579,7 @@ def get_bts(application_id):
     if DEBUG:
         print(f"    --- get_bts response: {bts_response.text}")
 
-    #check for empty dataset
-    if DEBUG:
-        print(f"length of bts_response {(len(bts_response.content.strip()))}")
-    
-    if not bts_response.content.decode().strip():  # Check for empty XML (after decoding)
-        return pd.DataFrame(), "empty"
-    
-    else:
-        try:
-            # Parse the XML content to get the root
-            xml_content = StringIO(bts_response.content.decode())
-            root = ET.parse(xml_content).getroot()
-            
-            # Check if there are any child elements with data
-            if not root.findall(".//*"):  # This checks for any descendant elements (not just direct children)
-                return pd.DataFrame(), "empty"
-
-            # Specify the root element using xpath
-            bts_df = pd.read_xml(StringIO(bts_response.text), xpath=".//business-transaction")
-            return bts_df, "valid"
-
-        except Exception as e:
-            error_type, error_value, _ = sys.exc_info()
-            print(f"An exception occurred converting business transaction XML to dataframe: {error_type.__name__}: {error_value}")
-            return None, "error"
+    return bts_response
 
 @handle_rest_errors
 def get_healthRules(application_id):
@@ -597,7 +609,7 @@ def get_servers():
     '''Get a list of all servers'''
     servers_url = BASE_URL + "/controller/sim/v2/user/machines"
     if DEBUG:
-        print(f"    --- Retrieving Servers from {servers_url}")
+        print(f"--- Retrieving Servers from {servers_url}")
     else:
         print("    --- Retrieving Servers...")
 
@@ -978,9 +990,9 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                     # Get and process business transactions
                     st.write(f"Retrieving business transactions for {app_name}...")
-                    bts_response = get_bts(app_id)
-                    bts_data, bts_status = bts_response
-                    
+                    bts_response, bts_status = get_bts(app_id)
+                    bts_data, bts_status = validate_and_parse_xml(bts_response, xpath=".//business-transaction")   
+
                     if bts_status == "valid":
                         if snes:
                             play_sound("sounds/smb_coin.wav")
@@ -1005,6 +1017,9 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                     elif bts_status == "empty":
                         st.write(f"No business transactions found for {app_name}.")
+
+                    else:
+                        st.write(f"No business transactions found for {app_name}. status: {bts_status}")
                     
                     # Get and process tiers
                     st.write(f"Retrieving tiers for {app_name}...")
@@ -1148,23 +1163,26 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                     # Get and process snapshots
                     if pull_snapshots:
+                        #pull snapshots and create deep links                        
                         st.write(f"Retrieving snapshots for {app_name}...")
-                        snapshots_response = get_snapshots(app_id)
-                        snapshots, snapshots_status = validate_json(snapshots_response)
-                        if snapshots_status == "valid":
-                            snapshots_df = pd.DataFrame(snapshots)
-                            snapshots_df['app_id'] = app_id
-                            
-                            if DEBUG:
-                                debug_df(snapshots_df, "snapshots_df")
+                        snapshots_response, snapshots_status = get_snapshots(app_id)
+                        snapshots_data, snapshots_status = validate_and_parse_xml(snapshots_response, xpath="//request-segment-data")
 
-                            st.write(f"Found {snapshots_df.shape[0]} for {app_name}.")
+                        if snapshots_status == "valid":
+                            if snes:
+                                play_sound("sounds/smb_coin.wav")
                             
+                            snapshots_df['app_id'] = app_id
+                            snapshots_df = pd.DataFrame(snapshots_data)
+
                             def contruct_snapshot_link(row):
+                                '''creates a deep link for each snapshot'''
                                 #make the id fields strings so they can be concatenated into a URL
                                 request_guid = str(row['requestGUID'])
-                                app_id = str(row['app_id'])
+                                app_id = str(row['applicationId'])
                                 bt_id = str(row['businessTransactionId'])
+                                
+                                #print(f"request_guid: {request_guid}, app_id: {app_id}, bt_id: {bt_id}")
                                 
                                 serverStartTime = row['serverStartTime']
                                 a = serverStartTime-1800000
@@ -1175,16 +1193,21 @@ if submitted and (retrieve_apm or retrieve_servers):
                                 snapshot_link = BASE_URL + "/controller/#/location=APP_SNAPSHOT_VIEWER&requestGUID=" + request_guid + "&application=" + app_id + "&businessTransaction=" + bt_id + "&rsdTime=Custom_Time_Range.BETWEEN_TIMES." + sst_end + "." + sst_begin + ".60" + "&tab=overview&dashboardMode=force"
                                 
                                 return snapshot_link
+                        
+                            if DEBUG:
+                                debug_df(snapshots_df, "snapshots_df")
 
-                            # create deep links for the snapshots
+                            st.write(f"Found {snapshots_df.shape[0]} snapshots.")
+                            
+                            # create and add deep links for the snapshots
                             st.write(f"Creating deep links for snapshots in {app_name}...")
                             print(f"Creating deep links for snapshots in {app_name}...")
-                            if snes:
-                                play_sound("sounds/smb_kick.wav")
-
+                            
                             snapshots_df['snapshot_link'] = snapshots_df.apply(contruct_snapshot_link, axis=1)
 
                             all_snapshots_df = pd.concat([all_snapshots_df, snapshots_df])
+                            st.write("merged snapshots_df into all_snapshots_df")
+                            debug_df(all_snapshots_df, "all_snapshots_df")
 
                             if snes:
                                 play_sound("sounds/smb_1-up.wav")
@@ -1192,12 +1215,20 @@ if submitted and (retrieve_apm or retrieve_servers):
                         elif snapshots_status == "empty":
                             print ("            --- No snapshots returned")
                             st.write(f"No snapshots found for {app_name}.")
+                            keep_status_open = True
+
+                        elif snapshots_status == "error":
+                            print(f"Snapshot response not valid! status: {snapshots_status}")
+                            st.write(f"Snapshot response not valid! status: {snapshots_status}")
+                            keep_status_open = True
+            
             else:
                 st.write(f"No application data found. status: {applications_status} data:{applications}")
-                
+                keep_status_open = True
+
         if retrieve_servers:
             # get ALL the servers and containers
-            st.write(f"Retrieving servers...")
+            st.write("Retrieving servers...")
             servers_response = get_servers()
             servers, servers_status = validate_json(servers_response)
             
@@ -1292,6 +1323,7 @@ if submitted and (retrieve_apm or retrieve_servers):
 
         #merge things
         st.write("Performing merge on data to make it human-friendly...")
+
         # Merge the snapshots data with app, bt, tier and node data
         if not all_snapshots_df.empty and not applications_df.empty and not all_tiers_df.empty and not all_nodes_df.empty and not all_bts_df.empty:
             if DEBUG:
@@ -1353,7 +1385,7 @@ if submitted and (retrieve_apm or retrieve_servers):
         if retrieve_apm and retrieve_servers and not all_nodes_df.empty and not all_servers_df.empty:
             if DEBUG:
                 st.write("Performing merge on servers data...")
-                print("        --- Merging node and machine data.")
+                print("--- Merging node and machine data.")
             
             st.write("Merging node and machine data...")
             
@@ -1364,7 +1396,7 @@ if submitted and (retrieve_apm or retrieve_servers):
             #delete the all_nodes_df to free up RAM
             if DEBUG:
                 st.write("purging all_nodes_df and performing GC to free RAM...")
-                print("purging all_nodes_df and performing GC to free RAM...")
+                print("--- purging all_nodes_df and performing GC to free RAM...")
             del all_nodes_df
             gc.collect()
 

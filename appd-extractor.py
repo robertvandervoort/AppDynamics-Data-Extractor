@@ -34,6 +34,49 @@ last_token_fetch_time = ""
 token_expiration = 300
 expiration_buffer = 30
 
+#--- Functions
+def show_popup_message(message, background_color, text_color, duration=3):
+    """
+    Displays a temporary popup message in Streamlit.
+
+    Args:
+        message (str): The message to display.
+        background_color (str): The background color of the popup.
+        text_color (str): The text color of the popup.
+        duration (int): The duration (in seconds) the message should be displayed.
+    """
+    
+    with st.container():
+        popup_style = f"""
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: {background_color};
+            color: {text_color};
+            padding: 20px;
+            border-radius: 5px;
+            z-index: 9999;
+            opacity: 1;
+            transition: opacity 1s ease-in-out;
+        """
+        
+        st.markdown(f'<div style="{popup_style}" id="popup">{message}</div>', unsafe_allow_html=True)
+        
+        time.sleep(duration)
+        
+        st.markdown(f"""
+        <script>
+            setTimeout(function() {{
+                document.getElementById('popup').style.opacity = '0';
+            }}, 100); // Small delay before fade
+            setTimeout(function() {{
+                document.getElementById('popup').remove();
+            }}, {duration * 1000 + 1000}); // Remove after fade
+        </script>
+        """, unsafe_allow_html=True)
+        return None
+
 def load_secrets():
     """Loads API credentials from secrets.yml if it exists."""
     try:
@@ -105,15 +148,17 @@ def connect(account, apiclient, secret):
             json_response = auth_response.json()
             last_token_fetch_time = time.time()
             token_expiration = json_response['expires_in']
+            print("Authenticated with controller.")
+            show_popup_message(f"Connection established. {auth_response}","green","black",3)
+
     else:
+        show_popup_message(f"Unable to log in at: {BASE_URL} \n\n HTTP Status Code: {auth_response} - {status}","red","black",3)
         print(f"Unable to log in at: {BASE_URL}")
         print("Please check your controller URL and try again.")
-        sys.exit(9)
+        return False
 
     __session__.headers['X-CSRF-TOKEN'] = json_response['access_token']
     __session__.headers['Authorization'] = f'Bearer {json_response["access_token"]}'
-    
-    print("Authenticated with controller.")
     
     if DEBUG:
         print(f"Last token fetch time: {last_token_fetch_time}")
@@ -537,7 +582,7 @@ def get_snapshots(application_id):
     snapshots_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + \
         "/request-snapshots?time-range-type=BEFORE_NOW&duration-in-mins=" + str(snapshot_duration_mins) + \
         "&first-in-chain=" + str(first_in_chain) + "&need-exit-calls=" + str(need_exit_calls) + \
-        "&need-props=" + str(need_props) + "&maximum-results=1000000"
+        "&need-props=" + str(need_props) + "&maximum-results=65000"
 
     if DEBUG:
         print("    --- Fetching snapshots from: "+ snapshots_url)

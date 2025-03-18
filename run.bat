@@ -1,4 +1,11 @@
+
 @echo off
+
+REM Check if running on Replit
+if defined REPL_ID (
+    python -m streamlit run appd-extractor.py
+    exit /b 0
+)
 
 if not exist "venv" (
     echo Virtual environment not found. Creating...
@@ -39,4 +46,3 @@ if not exist "venv" (
 
     streamlit run appd-extractor.py
 )
-

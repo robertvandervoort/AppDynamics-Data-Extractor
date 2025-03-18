@@ -3,7 +3,7 @@
 
 REM Check if running on Replit
 if defined REPL_ID (
-    python -m streamlit run appd-extractor.py
+    python -m streamlit run appd-extractor.py --browser.gatherUsageStats=false
     exit /b 0
 )
 

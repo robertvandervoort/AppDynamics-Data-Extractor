@@ -1,10 +1,9 @@
-
 #!/usr/bin/env sh
 
 # Check if running on Replit
 if [ -n "$REPL_ID" ]; then
     # On Replit, just run streamlit directly
-    python3 -m streamlit run appd-extractor.py
+    python3 -m streamlit run appd-extractor.py --browser.gatherUsageStats=false
     exit 0
 fi
 
@@ -62,5 +61,5 @@ else
     fi
 fi
 
-python3 -m streamlit run appd-extractor.py
+python3 -m streamlit run appd-extractor.py --browser.gatherUsageStats=false
 deactivate

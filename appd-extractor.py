@@ -368,6 +368,30 @@ def validate_json(response):
             print(response.text)
         return None, "error"
 
+@handle_rest_errors
+def get_events(application_id):
+    """Gets events from an application based on selected criteria"""
+    events_url = BASE_URL + "/controller/rest/applications/" + str(application_id) + \
+        "/events?time-range-type=BEFORE_NOW&duration-in-mins=" + str(event_duration_mins) + \
+        "&event-types=" + ",".join(event_types) + "&severities=INFO,WARN,ERROR&output=json"
+
+    if DEBUG:
+        print("    --- Fetching events from: "+ events_url)
+    else:
+        print("    --- Fetching events...")
+
+    if not is_token_valid():
+        authenticate("reauth")
+
+    events_response = requests.get(
+        events_url,
+        headers = __session__.headers,
+        verify = VERIFY_SSL
+    )
+    
+    return events_response
+
+
 def validate_and_parse_xml(response, xpath):
     """
     Validates an XML response and converts it to a pandas DataFrame.
@@ -843,8 +867,10 @@ if 'applications_df' in st.session_state:
 retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes, etc)?", value=True)    
 retrieve_servers = st.checkbox("Retrieve all machine agent data?", value=True)
 if retrieve_apm:
+    retrieve_events = st.checkbox("Retrieve events from application(s)?", value=False)
     pull_snapshots = st.checkbox("Retrieve transaction snapshots?", value=False)
 else:
+    retrieve_events = False
     pull_snapshots = False
 
 # --- User config form ---
@@ -878,6 +904,21 @@ with st.form("config_form"):
         "### Servers"
         calc_machine_availability = st.checkbox("Analyze server availability?", value=True)
         machine_metric_duration_mins = st.text_input("How far to look back for machine availability? (mins)", value="60")
+
+    if retrieve_events:
+        "### Events"
+        event_types = st.multiselect(
+            "Select event types:",
+            ["APPLICATION_ERROR", "APP_SERVER_RESTART", "DIAGNOSTIC_SESSION", 
+             "MEMORY_LEAK", "RESOURCE_POOL_LIMIT", "APPLICATION_CONFIG_CHANGE",
+             "APPLICATION_DEPLOYMENT", "BT_SLOW", "DEADLOCK", "ERROR",
+             "HIGH_END_TO_END_LATENCY", "SYSTEM_LOG", "AGENT_EVENT", "INFO_INSTRUMENTATION_VISIBILITY",
+             "NETWORK", "POLICY_OPEN_WARNING", "POLICY_OPEN_CRITICAL", "POLICY_CLOSE_WARNING",
+             "POLICY_CLOSE_CRITICAL", "POLICY_CANCELLED_WARNING", "POLICY_CANCELLED_CRITICAL",
+             "POLICY_CONTINUES_WARNING", "POLICY_CONTINUES_CRITICAL", "POLICY_UPGRADED",
+             "POLICY_DOWNGRADED", "CUSTOM"], 
+            default=["ERROR", "POLICY_OPEN_CRITICAL", "POLICY_OPEN_WARNING"])
+        event_duration_mins = st.text_input("How far to look back for events? (mins)", value="60")
         #normalize = st.checkbox("Break out server properties into columns?", value=False)
         #normalize = True
     
@@ -980,6 +1021,7 @@ if submitted and (retrieve_apm or retrieve_servers):
         all_bts_df = pd.DataFrame()
         all_tiers_df = pd.DataFrame()
         all_nodes_df = pd.DataFrame()
+        all_events_df = pd.DataFrame()
         all_nodes_merged_df = pd.DataFrame()
         all_backends_df = pd.DataFrame()
         all_healthRules_df = pd.DataFrame()
@@ -1205,6 +1247,33 @@ if submitted and (retrieve_apm or retrieve_servers):
 
                     else:
                         st.write(f"No health rules found for: {app_name} status: {healthRules_status}")
+
+                    # Get and process events
+                    if retrieve_events:
+                        st.write(f"Retrieving events for {app_name}...")
+                        events_response = get_events(app_id)
+                        events, events_status = validate_json(events_response)
+                        if events_status == "valid":
+                            events_df = pd.DataFrame(events)
+                            events_df['app_id'] = app_id
+                            events_df['app_name'] = app_name
+
+                            if DEBUG:
+                                debug_df(events_df, "events_df")
+
+                            st.write(f"Found {events_df.shape[0]} events for {app_name}.")
+
+                            # Convert timestamps
+                            events_df['eventTime'] = pd.to_datetime(events_df['eventTime'], unit='ms')
+                            events_df['eventTime'] = events_df['eventTime'].dt.strftime('%m/%d/%Y %I:%M:%S %p')
+
+                            all_events_df = pd.concat([all_events_df, events_df])
+
+                            if snes:
+                                play_sound("sounds/smb_coin.wav")
+
+                        else:
+                            st.write(f"No events found for: {app_name} status: {events_status}")
 
                     # Get and process snapshots
                     if pull_snapshots:
@@ -1610,6 +1679,7 @@ if submitted and (retrieve_apm or retrieve_servers):
                     ("Nodes", all_nodes_merged_df),
                     ("Backends", all_backends_df),
                     ("Health Rules", all_healthRules_df),
+                    ("Events", all_events_df),
                     ("Snapshots", all_snapshots_merged_df),
                     ("Servers", all_servers_df)
                 ]:

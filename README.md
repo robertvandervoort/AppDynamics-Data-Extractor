@@ -53,3 +53,15 @@ You can always launch the AppDynamics Data Extractor using the `run.sh` (Mac/Lin
 * If you do not select an application ID, the extractor will pull data for ALL applications on the controoler. This can take some time.
 * By default, the tool captures the last hour of data for availability (if selected) and transaction snapshots (if selected). This can be adjusted in the UI.
 * Enable debugging if you want to watch the tool work or if you run into issues. Debug output will be sent to the UI in Streamlit in a more digestible fashion, and in a more verbose fashion in the console window you launched it from. When contacting me / filing an issue, please have the debug output available.
+
+### License Processing (BETA)
+
+**Important:** License calculation functionality is currently in BETA status and is **disabled by default**. This feature can be enabled through the "Enable license processing?" checkbox in the user interface, but please be aware that:
+
+* This is experimental functionality with known issues
+* License calculations may not be accurate in all scenarios
+* Performance may be impacted when enabled
+* Results should be validated against your actual AppDynamics license usage
+* The feature may be modified or removed in future versions based on user feedback
+
+If you encounter issues with license processing, please disable this feature and report any problems through the project's issue tracker.

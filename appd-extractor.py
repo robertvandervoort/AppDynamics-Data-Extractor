@@ -843,6 +843,9 @@ debug_output = st.checkbox("Debug output?", value=False)
 if debug_output:
     snes = st.checkbox("8-bit my debug!", value=False)
 
+# License processing checkbox
+enable_license_processing = st.checkbox("Enable license processing?", value=False)
+
 if connect_button:
     global APPDYNAMICS_ACCOUNT_NAME, APPDYNAMICS_API_CLIENT, APPDYNAMICS_API_CLIENT_SECRET    
     # Update global variables with user input
@@ -1517,13 +1520,16 @@ if submitted and (retrieve_apm or retrieve_servers):
             }, inplace=True, errors='ignore') 
  
         #generate licensing df
-        if retrieve_apm and retrieve_servers and not all_nodes_merged_df.empty:
+        if enable_license_processing and retrieve_apm and retrieve_servers and not all_nodes_merged_df.empty:
             st.write("Generating license usage information...")
             # Apply the function and display the result
             license_usage_df = calculate_licenses(all_nodes_merged_df)
             debug_df(license_usage_df, "license_usage_df")
         else:
-            st.write("Skipping license usage reporting - please run with retrieve servers option checked.")
+            if not enable_license_processing:
+                st.write("Skipping license usage reporting - license processing is disabled.")
+            else:
+                st.write("Skipping license usage reporting - please run with retrieve servers option checked.")
     
         #--- start the output of all this data
 

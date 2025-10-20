@@ -54,6 +54,13 @@ You can always launch the AppDynamics Data Extractor using the `run.sh` (Mac/Lin
 * By default, the tool captures the last hour of data for availability (if selected) and transaction snapshots (if selected). This can be adjusted in the UI.
 * Enable debugging if you want to watch the tool work or if you run into issues. Debug output will be sent to the UI in Streamlit in a more digestible fashion, and in a more verbose fashion in the console window you launched it from. When contacting me / filing an issue, please have the debug output available.
 
+### Output Files
+
+* **Generated Excel files** are automatically saved to the `output/` folder in the project directory
+* The tool will display both the relative path (`output/filename.xlsx`) and full absolute path for easy file location
+* The `output/` folder will be created automatically if it doesn't exist
+* Each extraction creates a timestamped Excel file with your account name and analysis date
+
 ### License Processing (BETA)
 
 **Important:** License calculation functionality is currently in BETA status and is **disabled by default**. This feature can be enabled through the "Enable license processing?" checkbox in the user interface, but please be aware that:

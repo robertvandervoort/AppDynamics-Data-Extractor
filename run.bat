@@ -20,7 +20,9 @@ if not exist "venv" (
         )
     )
 
-    streamlit run appd-extractor.py
+    REM Disable telemetry and run in headless mode to avoid email prompts
+    set STREAMLIT_SERVER_HEADLESS=true
+    streamlit run appd-extractor.py --server.headless true
 
 ) else (
     echo Activating the virtual environment...
@@ -37,6 +39,8 @@ if not exist "venv" (
         )
     )
 
-    streamlit run appd-extractor.py
+    REM Disable telemetry and run in headless mode to avoid email prompts
+    set STREAMLIT_SERVER_HEADLESS=true
+    streamlit run appd-extractor.py --server.headless true
 )
 

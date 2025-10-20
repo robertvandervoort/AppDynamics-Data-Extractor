@@ -64,7 +64,8 @@ fi
 
 
 # Execute Python script with python3 (assuming it's within the venv)
-python3 -m streamlit run appd-extractor.py
+# Disable telemetry and run in headless mode to avoid email prompts
+STREAMLIT_SERVER_HEADLESS=true python3 -m streamlit run appd-extractor.py --server.headless true
 
 # Optionally, deactivate the virtual environment after the script finishes
 deactivate 

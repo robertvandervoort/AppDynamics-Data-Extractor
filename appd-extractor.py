@@ -967,8 +967,13 @@ if submitted and (retrieve_apm or retrieve_servers):
     
     DEBUG = debug_output
 
+    # Create output directory if it doesn't exist
+    output_dir = "output"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
     # Replace with the desired output file path and name or leave as it to create dynamically (recommended)
-    OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"_analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
+    OUTPUT_EXCEL_FILE = os.path.join(output_dir, APPDYNAMICS_ACCOUNT_NAME+"_analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx")
 
     # Set the base URL for the AppDynamics REST API
     # --- replace this with your on-prem controller URL if you're on prem
@@ -1591,11 +1596,15 @@ if submitted and (retrieve_apm or retrieve_servers):
 
         #change the output file name to include app name if this is being run against a single app
         if len(applications_df) == 1:
-            OUTPUT_EXCEL_FILE = APPDYNAMICS_ACCOUNT_NAME+"-"+(applications_df["app_name"].iloc[0]).replace(" ", "_")+"-analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx"
+            OUTPUT_EXCEL_FILE = os.path.join(output_dir, APPDYNAMICS_ACCOUNT_NAME+"-"+(applications_df["app_name"].iloc[0]).replace(" ", "_")+"-analysis_"+datetime.date.today().strftime("%m-%d-%Y")+".xlsx")
 
-        st.write(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
+        # Get absolute path for better user messaging
+        absolute_path = os.path.abspath(OUTPUT_EXCEL_FILE)
+        st.write(f"Writing output to file: {OUTPUT_EXCEL_FILE}")
+        st.info(f"📁 **Full path:** `{absolute_path}`")
         if DEBUG:
-            print(f"Writing ourput to file: {OUTPUT_EXCEL_FILE}")
+            print(f"Writing output to file: {OUTPUT_EXCEL_FILE}")
+            print(f"Full path: {absolute_path}")
         
         # --- Write to Excel with formatting ---
         try:
@@ -1766,9 +1775,11 @@ if submitted and (retrieve_apm or retrieve_servers):
                     subprocess.call(["xdg-open", OUTPUT_EXCEL_FILE], check=False)
                 except:
                     # If all else fails, just inform the user where the file is
+                    absolute_path = os.path.abspath(OUTPUT_EXCEL_FILE)
                     print(f"Excel file created: {OUTPUT_EXCEL_FILE}")
-                    st.info(f"Excel file created: {OUTPUT_EXCEL_FILE}")
+                    st.info(f"✅ **Excel file created:** `{absolute_path}`")
     except Exception as e:
+        absolute_path = os.path.abspath(OUTPUT_EXCEL_FILE)
         print(f"Could not automatically open Excel file: {e}")
         print(f"Excel file created: {OUTPUT_EXCEL_FILE}")
-        st.info(f"Excel file created: {OUTPUT_EXCEL_FILE}")
+        st.info(f"✅ **Excel file created:** `{absolute_path}`")

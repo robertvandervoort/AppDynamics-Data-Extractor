@@ -162,3 +162,7 @@ cython_debug/
 *.xlsm
 secrets.yml
 .DS_Store
+
+# Output folder - ignore all files but keep the folder structure
+output/*
+!output/.gitkeep

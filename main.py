@@ -247,8 +247,13 @@ def main():
             config.need_exit_calls = config_data["need_exit_calls"]
             config.need_props = config_data["need_props"]
             
+            # Create output directory if it doesn't exist
+            output_dir = "output"
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            
             # Generate output filename
-            output_file = f"{credentials['account_name']}_analysis_{datetime.date.today().strftime('%m-%d-%Y')}.xlsx"
+            output_file = os.path.join(output_dir, f"{credentials['account_name']}_analysis_{datetime.date.today().strftime('%m-%d-%Y')}.xlsx")
             
             # Get API client from session state
             api_client = st.session_state.get('api_client')
@@ -426,7 +431,9 @@ def main():
                     all_data['license_usage'] = pd.DataFrame()
                 
                 # Write output
+                absolute_path = os.path.abspath(output_file)
                 st.write(f"Writing output to file: {output_file}")
+                st.info(f"📁 **Full path:** `{absolute_path}`")
                 
                 if write_excel_output(all_data, output_file, config):
                     status.update(label="Extraction complete!", state="complete", expanded=False)
@@ -447,12 +454,14 @@ def main():
                                     subprocess.call(["xdg-open", output_file], check=False)
                                 except:
                                     # If all else fails, just inform the user where the file is
+                                    absolute_path = os.path.abspath(output_file)
                                     print(f"Excel file created: {output_file}")
-                                    st.info(f"Excel file created: {output_file}")
+                                    st.info(f"✅ **Excel file created:** `{absolute_path}`")
                     except Exception as e:
+                        absolute_path = os.path.abspath(output_file)
                         print(f"Could not automatically open Excel file: {e}")
                         print(f"Excel file created: {output_file}")
-                        st.info(f"Excel file created: {output_file}")
+                        st.info(f"✅ **Excel file created:** `{absolute_path}`")
                 else:
                     status.update(label="Extraction failed!", state="error", expanded=True)
 

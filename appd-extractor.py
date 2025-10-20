@@ -816,6 +816,10 @@ if secrets:
 
 connect_button = st.button("Connect")
 
+# Initialize application_id variable
+application_id = ""
+selected_app_ids = []
+
 #conditional multiselect populator
 if 'applications_df' in st.session_state:
     applications_df = st.session_state['applications_df']
@@ -842,6 +846,11 @@ if 'applications_df' in st.session_state:
 "***Note: license usage analysis (BETA) requires APM and server data***"
 retrieve_apm = st.checkbox("Retrieve APM (App, tiers, nodes, etc)?", value=True)    
 retrieve_servers = st.checkbox("Retrieve all machine agent data?", value=True)
+
+# Show warning if APM is selected but no applications are chosen
+if retrieve_apm and not retrieve_servers and 'applications_df' in st.session_state:
+    if not selected_app_ids:
+        st.warning("⚠️ **Application Selection Required**: You have selected APM data extraction but haven't chosen any applications. Please select at least one application above to continue.")
 if retrieve_apm:
     pull_snapshots = st.checkbox("Retrieve transaction snapshots?", value=False)
 else:
@@ -938,7 +947,9 @@ if submitted and (retrieve_apm or retrieve_servers):
             application_id = ""
 
         if not selected_app_ids and application_id == "" and not retrieve_servers:
-            st.write("You must select an application or an application_id to continue.")
+            st.error("❌ **Application Selection Required**")
+            st.error("You must select at least one application to continue with APM data extraction.")
+            st.info("💡 **Tip:** Use the 'Select applications' dropdown above to choose which applications to analyze.")
             st.rerun()
 
         if not calc_apm_availability:

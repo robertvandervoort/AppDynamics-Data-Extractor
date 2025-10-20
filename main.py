@@ -232,7 +232,9 @@ def main():
             
             # Validate inputs
             if config_data["retrieve_apm"] and not selected_app_ids and not config_data["retrieve_servers"]:
-                st.error("You must select an application or enable server data retrieval to continue.")
+                st.error("❌ **Application Selection Required**")
+                st.error("You must select at least one application to continue with APM data extraction.")
+                st.info("💡 **Tip:** Use the 'Select applications' dropdown above to choose which applications to analyze.")
                 return
             
             # Update configuration

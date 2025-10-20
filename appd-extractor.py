@@ -1740,9 +1740,24 @@ if submitted and (retrieve_apm or retrieve_servers):
     status.update(label="Extraction complete!", state="complete", expanded=keep_status_open)
 
     # Open the Excel file
-    if sys.platform == "win32":
-        os.startfile(OUTPUT_EXCEL_FILE) 
-    elif sys.platform == "darwin":  # macOS
-        subprocess.call(["open", OUTPUT_EXCEL_FILE])
-    else:  # Linux or other Unix-like systems
-        subprocess.call(["xdg-open", OUTPUT_EXCEL_FILE])
+    try:
+        if sys.platform == "win32":
+            os.startfile(OUTPUT_EXCEL_FILE) 
+        elif sys.platform == "darwin":  # macOS
+            subprocess.call(["open", OUTPUT_EXCEL_FILE])
+        else:  # Linux or other Unix-like systems
+            # Try xdg-open first, then fall back to other methods
+            try:
+                subprocess.call(["xdg-open", OUTPUT_EXCEL_FILE])
+            except FileNotFoundError:
+                # Fallback: try to open with default application
+                try:
+                    subprocess.call(["xdg-open", OUTPUT_EXCEL_FILE], check=False)
+                except:
+                    # If all else fails, just inform the user where the file is
+                    print(f"Excel file created: {OUTPUT_EXCEL_FILE}")
+                    st.info(f"Excel file created: {OUTPUT_EXCEL_FILE}")
+    except Exception as e:
+        print(f"Could not automatically open Excel file: {e}")
+        print(f"Excel file created: {OUTPUT_EXCEL_FILE}")
+        st.info(f"Excel file created: {OUTPUT_EXCEL_FILE}")

@@ -2,8 +2,8 @@
 Configuration settings for AppDynamics Data Extractor.
 """
 import os
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List
 
 
 @dataclass
@@ -34,6 +34,14 @@ class AppConfig:
     
     # Output settings
     keep_status_open: bool = False
+
+    # Event settings
+    default_event_duration: int = 60
+    enable_health_rule_violations: bool = False
+    enable_general_events: bool = False
+    enable_custom_events: bool = False
+    selected_event_types: List[str] = field(default_factory=list)
+    selected_severities: List[str] = field(default_factory=lambda: ["INFO", "WARN", "ERROR"])
 
 
 @dataclass

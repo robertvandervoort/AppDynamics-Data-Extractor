@@ -19,7 +19,7 @@ from ui import (
     render_credentials_form, render_application_selection, render_configuration_form,
     render_debug_info, render_progress_status, render_results_summary
 )
-from utils import validate_json
+from utils import validate_json, Logger
 
 
 def play_sound(file_path: str):
@@ -66,7 +66,10 @@ def write_excel_output(data: Dict[str, pd.DataFrame], output_file: str, config: 
                 ("Backends", "backends"),
                 ("Health Rules", "health_rules"),
                 ("Snapshots", "snapshots"),
-                ("Servers", "servers")
+                ("Servers", "servers"),
+                ("Health Rule Violations", "health_rule_violations"),
+                ("General Events", "general_events"),
+                ("Custom Events", "custom_events"),
             ]
             
             for sheet_name, data_key in sheet_mapping:
@@ -75,13 +78,15 @@ def write_excel_output(data: Dict[str, pd.DataFrame], output_file: str, config: 
                 if not df.empty:
                     # Convert column names to strings
                     df.columns = df.columns.astype(str)
-                    
+
                     # Sort columns alphabetically
                     column_order = sorted(df.columns)
                     df = df[column_order]
-                    
-                    # Replace NaNs with empty strings
-                    df.fillna('', inplace=True)
+
+                    # Replace NaNs only in object columns to avoid dtype warnings
+                    obj_cols = df.select_dtypes(include=['object']).columns
+                    if len(obj_cols) > 0:
+                        df[obj_cols] = df[obj_cols].fillna('')
                     
                     # Write to Excel
                     df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -184,7 +189,9 @@ def main():
         
         if authenticator.authenticate():
             # Get applications
-            api_client = AppDAPIClient(authenticator)
+            # Create logger with a temporary UI writer (patched after status is created)
+            logger = Logger(debug=config.debug)
+            api_client = AppDAPIClient(authenticator, logger=logger)
             response, status = api_client.get_applications()
             
             if status == "valid":
@@ -262,10 +269,15 @@ def main():
                 return
             
             # Create data extractor
-            extractor = AppDDataExtractor(api_client, config)
+            extractor = AppDDataExtractor(api_client, config, logger=logger)
             
             # Process data
             with render_progress_status("Extracting data...", expanded=True) as status:
+                # Connect logger to UI as soon as status exists
+                logger.attach_ui_writer(lambda msg: status.write(msg))
+                # Also maintain a scrolling text area for logs
+                log_container = st.empty()
+                logger.attach_ui_writer(lambda msg: log_container.write(msg))
                 st.write(f"Logging into controller at {api_client.authenticator.credentials.base_url}...")
                 
                 # Extract all data
@@ -275,7 +287,19 @@ def main():
                     retrieve_servers=config_data["retrieve_servers"],
                     calc_apm_availability=config_data["calc_apm_availability"],
                     calc_machine_availability=config_data["calc_machine_availability"],
-                    pull_snapshots=config_data["pull_snapshots"]
+                    pull_snapshots=config_data["pull_snapshots"],
+                    # events
+                    retrieve_health_rule_violations=config_data["retrieve_health_rule_violations"],
+                    retrieve_general_events=config_data["retrieve_general_events"],
+                    retrieve_custom_events=config_data["retrieve_custom_events"],
+                    event_duration_mins=(
+                        config_data["event_duration_mins"]
+                        if config_data["retrieve_general_events"] or config_data["retrieve_custom_events"]
+                        else (config_data["hrv_duration_mins"] if config_data["retrieve_health_rule_violations"] else 60)
+                    ),
+                    event_types=config_data.get("selected_event_types"),
+                    event_severities=config_data.get("event_severities"),
+                    custom_event_severities=config_data.get("custom_event_severities"),
                 )
                 
                 # Convert epoch timestamps to datetime

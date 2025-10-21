@@ -5,19 +5,22 @@ import pandas as pd
 import datetime
 from typing import Dict, List, Optional, Tuple
 from api import AppDAPIClient
-from utils import validate_json, validate_and_parse_xml, determine_availability, calculate_licenses, construct_snapshot_link
+from utils import validate_json, validate_and_parse_xml, determine_availability, calculate_licenses, construct_snapshot_link, parse_event_entities, Logger
 
 
 class AppDDataExtractor:
     """Main class for extracting and processing AppDynamics data."""
     
-    def __init__(self, api_client: AppDAPIClient, config):
+    def __init__(self, api_client: AppDAPIClient, config, logger: Logger | None = None):
         self.api_client = api_client
         self.config = config
         self.data = {}
+        self.logger = logger
     
     def extract_applications(self, application_ids: Optional[List[str]] = None) -> pd.DataFrame:
         """Extract applications data."""
+        if self.logger:
+            self.logger.info("Retrieving applications...")
         if application_ids and len(application_ids) == 1 and application_ids[0] != "ALL":
             response, status = self.api_client.get_applications(application_ids[0])
         else:
@@ -40,6 +43,8 @@ class AppDDataExtractor:
     
     def extract_business_transactions(self, application_id: str) -> pd.DataFrame:
         """Extract business transactions for an application."""
+        if self.logger:
+            self.logger.info(f"Retrieving business transactions for app {application_id}...")
         response, status = self.api_client.get_business_transactions(application_id)
         if status != "valid":
             return pd.DataFrame()
@@ -59,6 +64,8 @@ class AppDDataExtractor:
     
     def extract_tiers(self, application_id: str, app_name: str) -> pd.DataFrame:
         """Extract tiers for an application."""
+        if self.logger:
+            self.logger.info(f"Retrieving tiers for app {application_id}...")
         response, status = self.api_client.get_tiers(application_id)
         if status != "valid":
             return pd.DataFrame()
@@ -75,6 +82,8 @@ class AppDDataExtractor:
     
     def extract_nodes(self, application_id: str, app_name: str) -> pd.DataFrame:
         """Extract nodes for an application."""
+        if self.logger:
+            self.logger.info(f"Retrieving nodes for app {application_id}...")
         response, status = self.api_client.get_app_nodes(application_id)
         if status != "valid":
             return pd.DataFrame()
@@ -94,6 +103,8 @@ class AppDDataExtractor:
     
     def extract_backends(self, application_id: str, app_name: str) -> pd.DataFrame:
         """Extract backends for an application."""
+        if self.logger:
+            self.logger.info(f"Retrieving backends for app {application_id}...")
         response, status = self.api_client.get_app_backends(application_id)
         if status != "valid":
             return pd.DataFrame()
@@ -110,6 +121,8 @@ class AppDDataExtractor:
     
     def extract_health_rules(self, application_id: str, app_name: str) -> pd.DataFrame:
         """Extract health rules for an application."""
+        if self.logger:
+            self.logger.info(f"Retrieving health rules for app {application_id}...")
         response, status = self.api_client.get_health_rules(application_id)
         if status != "valid":
             return pd.DataFrame()
@@ -125,6 +138,8 @@ class AppDDataExtractor:
     
     def extract_snapshots(self, application_id: str, duration_mins: int) -> pd.DataFrame:
         """Extract snapshots for an application."""
+        if self.logger:
+            self.logger.info(f"Retrieving snapshots for app {application_id}...")
         response, status = self.api_client.get_snapshots(
             application_id, duration_mins, 
             self.config.first_in_chain, 
@@ -154,6 +169,8 @@ class AppDDataExtractor:
     
     def extract_servers(self) -> pd.DataFrame:
         """Extract servers/machines data."""
+        if self.logger:
+            self.logger.info("Retrieving servers...")
         response, status = self.api_client.get_servers()
         if status != "valid":
             return pd.DataFrame()
@@ -163,6 +180,107 @@ class AppDDataExtractor:
             return pd.DataFrame()
         
         return pd.DataFrame(data)
+
+    def extract_health_rule_violations(self, application_id: str, app_name: str, duration_mins: int) -> pd.DataFrame:
+        """Extract health rule violations for an application."""
+        if self.logger:
+            self.logger.info(f"Retrieving health rule violations for app {application_id}...")
+        response, status = self.api_client.get_health_rule_violations(
+            application_id=application_id,
+            time_range_type="BEFORE_NOW",
+            duration_mins=duration_mins,
+            output="XML",
+        )
+        if status != "valid" or not response:
+            return pd.DataFrame()
+
+        df, df_status = validate_and_parse_xml(response, xpath=".//policy-violation")
+        if df_status != "valid" or df.empty:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(df)
+        df['app_id'] = application_id
+        df['app_name'] = app_name
+        # rename id for clarity
+        if 'id' in df.columns:
+            df.rename(columns={'id': 'violation_id'}, inplace=True)
+
+        # convert times if present
+        for col in [
+            'startTimeInMillis', 'detectedTimeInMillis', 'endTimeInMillis'
+        ]:
+            if col in df.columns:
+                try:
+                    df[col.replace('InMillis', '')] = pd.to_datetime(df[col], unit='ms', errors='coerce')
+                except Exception:
+                    pass
+
+        return df
+
+    def extract_general_events(
+        self,
+        application_id: str,
+        app_name: str,
+        event_types: list,
+        severities: list,
+        duration_mins: int,
+        tier: str | None = None,
+    ) -> pd.DataFrame:
+        """Extract general events for an application, handling pagination limits."""
+        try:
+            records = self.api_client.get_events_paginated(
+                application_id=application_id,
+                event_types=event_types,
+                severities=severities,
+                duration_mins=duration_mins,
+                tier=tier,
+            )
+        except Exception:
+            records = []
+
+        if not records:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(records)
+        if df.empty:
+            return df
+
+        df['app_id'] = application_id
+        df['app_name'] = app_name
+
+        # Standardize columns where possible
+        if 'id' in df.columns:
+            df.rename(columns={'id': 'event_id'}, inplace=True)
+        if 'eventTime' in df.columns:
+            try:
+                df['eventTime'] = pd.to_datetime(df['eventTime'], unit='ms', errors='coerce')
+            except Exception:
+                pass
+
+        # Flatten entity structures to readable strings when present
+        for col in ['affectedEntities', 'triggeredEntity']:
+            if col in df.columns:
+                df[col] = df[col].apply(parse_event_entities)
+
+        return df
+
+    def extract_custom_events(
+        self,
+        application_id: str,
+        app_name: str,
+        severities: list,
+        duration_mins: int,
+        tier: str | None = None,
+    ) -> pd.DataFrame:
+        """Extract custom events (eventtype=CUSTOM)."""
+        return self.extract_general_events(
+            application_id=application_id,
+            app_name=app_name,
+            event_types=["CUSTOM"],
+            severities=severities,
+            duration_mins=duration_mins,
+            tier=tier,
+        )
     
     def add_availability_data(self, df: pd.DataFrame, data_type: str, 
                             duration_mins: int) -> pd.DataFrame:
@@ -208,7 +326,15 @@ class AppDDataExtractor:
     def process_all_data(self, application_ids: Optional[List[str]] = None, 
                         retrieve_apm: bool = True, retrieve_servers: bool = True,
                         calc_apm_availability: bool = True, calc_machine_availability: bool = True,
-                        pull_snapshots: bool = False) -> Dict[str, pd.DataFrame]:
+                        pull_snapshots: bool = False,
+                        # events
+                        retrieve_health_rule_violations: bool = False,
+                        retrieve_general_events: bool = False,
+                        retrieve_custom_events: bool = False,
+                        event_duration_mins: int = 60,
+                        event_types: Optional[List[str]] = None,
+                        event_severities: Optional[List[str]] = None,
+                        custom_event_severities: Optional[List[str]] = None) -> Dict[str, pd.DataFrame]:
         """Process all data extraction based on configuration."""
         
         # Initialize data containers
@@ -221,7 +347,10 @@ class AppDDataExtractor:
             'health_rules': pd.DataFrame(),
             'snapshots': pd.DataFrame(),
             'servers': pd.DataFrame(),
-            'license_usage': pd.DataFrame()
+            'license_usage': pd.DataFrame(),
+            'health_rule_violations': pd.DataFrame(),
+            'general_events': pd.DataFrame(),
+            'custom_events': pd.DataFrame(),
         }
         
         # Create information sheet
@@ -243,7 +372,7 @@ class AppDDataExtractor:
                 self.config.default_apm_metric_duration if calc_apm_availability else 0,
                 self.config.default_machine_metric_duration if calc_machine_availability else 0,
                 self.config.metric_rollup, pull_snapshots,
-                self.config.default_snapshot_duration if pull_snapshots else 0
+                self.config.default_snapshot_duration if pull_snapshots else 0,
             ]
         })
         
@@ -286,6 +415,33 @@ class AppDDataExtractor:
                         snapshots_df = self.extract_snapshots(app_id, self.config.default_snapshot_duration)
                         if not snapshots_df.empty:
                             all_data['snapshots'] = pd.concat([all_data['snapshots'], snapshots_df])
+
+                    # Events extraction per app
+                    if retrieve_health_rule_violations:
+                        hrv_df = self.extract_health_rule_violations(app_id, app_name, event_duration_mins)
+                        if not hrv_df.empty:
+                            all_data['health_rule_violations'] = pd.concat([all_data['health_rule_violations'], hrv_df])
+
+                    if retrieve_general_events and event_types:
+                        ge_df = self.extract_general_events(
+                            app_id,
+                            app_name,
+                            event_types=event_types,
+                            severities=event_severities or ["WARN", "ERROR"],
+                            duration_mins=event_duration_mins,
+                        )
+                        if not ge_df.empty:
+                            all_data['general_events'] = pd.concat([all_data['general_events'], ge_df])
+
+                    if retrieve_custom_events:
+                        ce_df = self.extract_custom_events(
+                            app_id,
+                            app_name,
+                            severities=custom_event_severities or ["INFO", "WARN", "ERROR"],
+                            duration_mins=event_duration_mins,
+                        )
+                        if not ce_df.empty:
+                            all_data['custom_events'] = pd.concat([all_data['custom_events'], ce_df])
         
         if retrieve_servers:
             all_data['servers'] = self.extract_servers()

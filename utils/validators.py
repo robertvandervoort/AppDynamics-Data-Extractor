@@ -4,7 +4,7 @@ Data validation utilities.
 import json
 import pandas as pd
 from io import StringIO
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple, Optional, List, Dict
 import requests
 
 
@@ -67,17 +67,24 @@ def validate_and_parse_xml(response: requests.Response, xpath: str) -> Tuple[pd.
         Tuple of (DataFrame, status) where status is 'valid', 'empty', or 'error'
     """
     try:
-        if not response.content.decode().strip():
+        decoded = response.content.decode(errors="ignore").strip()
+        if not decoded:
             return pd.DataFrame(), "empty"
-        
-        xml_content = StringIO(response.content.decode())
+
+        xml_content = StringIO(decoded)
         df = pd.read_xml(xml_content, xpath=xpath)
-        
-        if df.empty:
-            return df, "empty"
-        else:
-            return df, "valid"
-            
+
+        if df is None or df.empty:
+            return pd.DataFrame(), "empty"
+        return df, "valid"
+
+    except ValueError as e:
+        # pandas raises ValueError when the XPath matches no nodes
+        msg = str(e).lower()
+        if "xpath does not return any nodes" in msg:
+            return pd.DataFrame(), "empty"
+        print(f"An exception occurred converting XML to DataFrame: {type(e).__name__}: {e}")
+        return pd.DataFrame(), "error"
     except Exception as e:
         print(f"An exception occurred converting XML to DataFrame: {type(e).__name__}: {e}")
         return pd.DataFrame(), "error"
@@ -104,6 +111,47 @@ def determine_availability(metric_data: list, metric_data_status: str) -> Tuple[
     
     return None, None
 
+
+def parse_event_entities(entities: Any) -> str:
+    """Parse affectedEntities or triggeredEntity structures into a concise string.
+
+    Accepts a DataFrame cell parsed from XML which may be:
+    - dict with nested 'entity-definition' or fields {entityType, entityId, name}
+    - list of dicts
+    - scalar/str
+    Returns a human-friendly comma-separated string.
+    """
+    try:
+        if entities is None or entities == "" or (isinstance(entities, float) and pd.isna(entities)):
+            return ""
+
+        def _fmt(d: Dict[str, Any]) -> str:
+            et = d.get("entityType") or d.get("type") or "?"
+            name = d.get("name") or d.get("entityName") or "?"
+            eid = d.get("entityId") or d.get("id")
+            return f"{et}:{name}{f' ({eid})' if eid is not None else ''}"
+
+        # If it's a dict containing a nested list or dict under a common key
+        if isinstance(entities, dict):
+            # Common shapes from AppD XML converted by pandas
+            if "entity-definition" in entities:
+                ed = entities["entity-definition"]
+                if isinstance(ed, list):
+                    return ", ".join(_fmt(x) for x in ed if isinstance(x, dict))
+                if isinstance(ed, dict):
+                    return _fmt(ed)
+            # Single entity
+            return _fmt(entities)
+
+        if isinstance(entities, list):
+            return ", ".join(_fmt(x) for x in entities if isinstance(x, dict))
+
+        if isinstance(entities, str):
+            return entities
+
+        return str(entities)
+    except Exception:
+        return ""
 
 
 

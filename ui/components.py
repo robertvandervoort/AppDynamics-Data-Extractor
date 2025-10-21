@@ -127,6 +127,68 @@ def render_configuration_form(config) -> Dict[str, Any]:
             calc_machine_availability = False
             machine_metric_duration_mins = 0
         
+        # Events section
+        st.subheader("Events")
+        retrieve_health_rule_violations = st.checkbox("Get health rule violations?", value=False)
+
+        if retrieve_health_rule_violations:
+            with st.expander("Health Rule Violation Options", expanded=True):
+                hrv_duration_mins = st.number_input(
+                    "How far to look back for violations? (mins)",
+                    value=config.default_event_duration, min_value=0
+                )
+                # HRV endpoint doesn't filter by severity at query; keep UI simple
+                hrv_severities = ["WARN", "ERROR"]
+        else:
+            hrv_duration_mins = 0
+            hrv_severities = []
+
+        retrieve_general_events = st.checkbox("Get general events?", value=False)
+
+        if retrieve_general_events:
+            with st.expander("General Event Options", expanded=True):
+                from config.event_types import EVENT_TYPES, SEVERITY_LEVELS
+
+                event_duration_mins = st.number_input(
+                    "How far to look back for events? (mins)",
+                    value=config.default_event_duration, min_value=0
+                )
+
+                selected_event_types: List[str] = []
+                for category, types in EVENT_TYPES.items():
+                    st.write(f"**{category}**")
+                    for event_type in types:
+                        if st.checkbox(event_type, value=False, key=f"event_{event_type}"):
+                            selected_event_types.append(event_type)
+
+                event_severities = st.multiselect(
+                    "Severity levels",
+                    options=SEVERITY_LEVELS,
+                    default=["WARN", "ERROR"]
+                )
+        else:
+            event_duration_mins = 0
+            selected_event_types = []
+            event_severities = []
+
+        retrieve_custom_events = st.checkbox("Get custom events?", value=False)
+
+        if retrieve_custom_events:
+            with st.expander("Custom Event Options", expanded=True):
+                from config.event_types import SEVERITY_LEVELS
+                custom_event_duration_mins = st.number_input(
+                    "How far to look back for custom events? (mins)",
+                    value=config.default_event_duration, min_value=0
+                )
+                custom_event_severities = st.multiselect(
+                    "Severity levels",
+                    options=SEVERITY_LEVELS,
+                    default=["INFO", "WARN", "ERROR"]
+                )
+        else:
+            custom_event_duration_mins = 0
+            custom_event_severities = []
+
         # Debug options
         debug_output = st.checkbox("Debug output?", value=False)
         snes_sounds = False
@@ -154,7 +216,18 @@ def render_configuration_form(config) -> Dict[str, Any]:
             "debug_output": debug_output,
             "snes_sounds": snes_sounds,
             "enable_license_processing": enable_license_processing,
-            "submitted": submitted
+            "submitted": submitted,
+            # events
+            "retrieve_health_rule_violations": retrieve_health_rule_violations,
+            "hrv_duration_mins": hrv_duration_mins,
+            "hrv_severities": hrv_severities,
+            "retrieve_general_events": retrieve_general_events,
+            "event_duration_mins": event_duration_mins,
+            "selected_event_types": selected_event_types,
+            "event_severities": event_severities,
+            "retrieve_custom_events": retrieve_custom_events,
+            "custom_event_duration_mins": custom_event_duration_mins,
+            "custom_event_severities": custom_event_severities,
         }
 
 
